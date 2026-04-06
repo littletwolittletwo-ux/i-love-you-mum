@@ -173,20 +173,15 @@ app.get('/health', async (req, res) => {
     health.services.livekit = 'error';
   }
 
-  // Check Redis (optional — silent fail)
+  // Check Redis (Upstash HTTP REST — optional)
   try {
-    const Redis = require('ioredis');
-    const redis = new Redis({
-      lazyConnect: true,
-      connectTimeout: 2000,
-      maxRetriesPerRequest: 0,
-      retryStrategy: () => null,
-    });
-    redis.on('error', () => {}); // suppress unhandled error events
-    await redis.connect();
-    await redis.ping();
-    health.services.redis = 'connected';
-    await redis.quit();
+    const upstash = require('./src/lib/upstash-redis');
+    if (upstash.isAvailable()) {
+      const pong = await upstash.ping();
+      health.services.redis = pong === 'PONG' ? 'connected' : 'unavailable';
+    } else {
+      health.services.redis = 'not configured';
+    }
   } catch (e) {
     health.services.redis = 'unavailable';
   }

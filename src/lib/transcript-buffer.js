@@ -1,45 +1,18 @@
 /**
  * Transcript buffer — stores real-time transcript chunks keyed by bot_id.
- * Uses Redis if REDIS_URL is set, otherwise falls back to in-memory Map.
+ * Uses Upstash Redis HTTP REST if configured, otherwise falls back to in-memory Map.
  */
 
-let redis = null;
+const redis = require('./upstash-redis');
 const memoryStore = new Map();
 
-function initRedis() {
-  if (redis) return redis;
-
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) {
-    return null;
-  }
-
-  try {
-    const Redis = require('ioredis');
-    redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, lazyConnect: true });
-    redis.on('error', (err) => {
-      console.warn('[transcript-buffer] Redis error, falling back to memory:', err.message);
-      redis = null;
-    });
-    redis.connect().catch(() => {
-      console.warn('[transcript-buffer] Redis connect failed, using memory.');
-      redis = null;
-    });
-    return redis;
-  } catch (err) {
-    console.warn('[transcript-buffer] Redis unavailable:', err.message);
-    return null;
-  }
-}
-
 async function appendChunk(botId, chunk) {
-  const r = initRedis();
   const entry = JSON.stringify(chunk);
 
-  if (r) {
+  if (redis.isAvailable()) {
     try {
-      await r.rpush(`transcript:${botId}`, entry);
-      await r.expire(`transcript:${botId}`, 7200); // 2 hour TTL
+      await redis.rpush(`transcript:${botId}`, entry);
+      await redis.expire(`transcript:${botId}`, 7200); // 2 hour TTL
       return;
     } catch (err) {
       // Fall through to memory
@@ -54,12 +27,10 @@ async function appendChunk(botId, chunk) {
 }
 
 async function getTranscript(botId) {
-  const r = initRedis();
-
-  if (r) {
+  if (redis.isAvailable()) {
     try {
-      const entries = await r.lrange(`transcript:${botId}`, 0, -1);
-      return entries.map(e => JSON.parse(e));
+      const entries = await redis.lrange(`transcript:${botId}`, 0, -1);
+      return (entries || []).map(e => JSON.parse(e));
     } catch (err) {
       // Fall through
     }
@@ -69,11 +40,9 @@ async function getTranscript(botId) {
 }
 
 async function clearTranscript(botId) {
-  const r = initRedis();
-
-  if (r) {
+  if (redis.isAvailable()) {
     try {
-      await r.del(`transcript:${botId}`);
+      await redis.del(`transcript:${botId}`);
     } catch (err) {
       // Fall through
     }

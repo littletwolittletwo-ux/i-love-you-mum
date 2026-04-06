@@ -1,24 +1,11 @@
 /**
  * Raven Perception Engine — Tavus Raven-1 for perception ONLY.
  * Watches prospect's video feed and fires signals into LLM context.
- * Uses Redis for real-time perception signal buffering (falls back to in-memory Map).
+ * Uses Upstash Redis HTTP REST for real-time perception signal buffering (falls back to in-memory Map).
  */
 
-let redis = null;
+const redis = require('../lib/upstash-redis');
 const memoryStore = new Map();
-
-function initRedis() {
-  if (redis) return redis;
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) return null;
-  try {
-    const Redis = require('ioredis');
-    redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, lazyConnect: true });
-    redis.on('error', () => { redis = null; });
-    redis.connect().catch(() => { redis = null; });
-    return redis;
-  } catch { return null; }
-}
 
 /**
  * Init Raven perception for a session.
@@ -27,9 +14,8 @@ function initRedis() {
  */
 async function initRavenPerception(sessionId, prospectVideoTrack) {
   console.log(`[raven] Perception active for session: ${sessionId}`);
-  const r = initRedis();
-  if (r) {
-    try { await r.set(`raven:${sessionId}`, JSON.stringify({ active: true, startTime: Date.now() }), 'EX', 7200); } catch {}
+  if (redis.isAvailable()) {
+    try { await redis.set(`raven:${sessionId}`, JSON.stringify({ active: true, startTime: Date.now() }), 'EX', 7200); } catch {}
   } else {
     memoryStore.set(`raven:${sessionId}`, { active: true, startTime: Date.now() });
   }
@@ -68,13 +54,12 @@ function onSpeechStart() {
 async function appendPerceptionContext(sessionId, signal) {
   if (!signal) return;
   const key = `perception:${sessionId}`;
-  const r = initRedis();
 
-  if (r) {
+  if (redis.isAvailable()) {
     try {
-      await r.rpush(key, signal);
-      await r.ltrim(key, -5, -1); // Keep last 5
-      await r.expire(key, 300);
+      await redis.rpush(key, signal);
+      await redis.ltrim(key, -5, -1); // Keep last 5
+      await redis.expire(key, 300);
       return;
     } catch {}
   }
@@ -91,12 +76,11 @@ async function appendPerceptionContext(sessionId, signal) {
  */
 async function getPerceptionContext(sessionId) {
   const key = `perception:${sessionId}`;
-  const r = initRedis();
 
-  if (r) {
+  if (redis.isAvailable()) {
     try {
-      const entries = await r.lrange(key, 0, -1);
-      return entries.join('\n');
+      const entries = await redis.lrange(key, 0, -1);
+      return (entries || []).join('\n');
     } catch {}
   }
 
@@ -109,11 +93,10 @@ async function getPerceptionContext(sessionId) {
  */
 async function closeRavenSession(sessionId) {
   console.log(`[raven] Closing session: ${sessionId}`);
-  const r = initRedis();
-  if (r) {
+  if (redis.isAvailable()) {
     try {
-      await r.del(`raven:${sessionId}`);
-      await r.del(`perception:${sessionId}`);
+      await redis.del(`raven:${sessionId}`);
+      await redis.del(`perception:${sessionId}`);
     } catch {}
   }
   memoryStore.delete(`raven:${sessionId}`);

@@ -5,9 +5,6 @@ buildCommand = "npm install"
 [deploy]
 startCommand = "node index.js"
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 120
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
-
-[[services]]
-name = "ai-closer-platform"

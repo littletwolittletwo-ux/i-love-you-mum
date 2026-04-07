@@ -140,4 +140,98 @@ async function updateAgentForProspect(clientId, prospectId) {
   }
 }
 
-module.exports = { createRetellAgent, updateAgentForProspect };
+/**
+ * Initiate an outbound phone call via Retell.
+ * Updates agent prompt with fresh memory, then places the call.
+ */
+async function initiateOutboundCall(prospectId, clientId, phoneNumber) {
+  console.log(`[retell] Initiating outbound call to ${phoneNumber} for prospect ${prospectId}...`);
+
+  const { data: prospect, error: pErr } = await supabase
+    .from('prospects')
+    .select('*')
+    .eq('id', prospectId)
+    .single();
+
+  if (pErr || !prospect) throw new Error(`Prospect not found: ${prospectId}`);
+
+  const { data: client, error: cErr } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('id', clientId)
+    .single();
+
+  if (cErr || !client) throw new Error(`Client not found: ${clientId}`);
+  if (!client.retell_agent_id) throw new Error('No Retell agent configured for this client');
+
+  const retellPhone = env.RETELL_PHONE_NUMBER || process.env.RETELL_PHONE_NUMBER;
+  if (!retellPhone) {
+    throw new Error('RETELL_PHONE_NUMBER not configured. Go to app.retellai.com → Phone Numbers → Buy a number → then set RETELL_PHONE_NUMBER in your environment variables.');
+  }
+
+  // Update agent with fresh prospect memory
+  await updateAgentForProspect(clientId, prospectId);
+
+  // Place the call via Retell v2
+  let retellCall;
+  try {
+    const callRes = await axios.post(`${RETELL_API_BASE}/v2/create-phone-call`, {
+      from_number: retellPhone,
+      to_number: phoneNumber,
+      agent_id: client.retell_agent_id,
+      metadata: {
+        prospect_id: prospectId,
+        client_id: clientId,
+      },
+    }, {
+      headers: retellHeaders,
+    });
+    retellCall = callRes.data;
+    console.log(`[retell] Call initiated: ${retellCall.call_id}`);
+  } catch (err) {
+    const errMsg = err.response?.data || err.message;
+    console.error('[retell] Outbound call failed:', JSON.stringify(errMsg));
+    throw new Error(`Retell outbound call failed: ${JSON.stringify(errMsg)}`);
+  }
+
+  // Create call record in Supabase
+  const { data: callRecord, error: callErr } = await supabase
+    .from('calls')
+    .insert({
+      prospect_id: prospectId,
+      client_id: clientId,
+      retell_call_id: retellCall.call_id,
+      call_type: 'phone',
+      status: 'active',
+    })
+    .select()
+    .single();
+
+  if (callErr) {
+    console.error('[retell] Failed to save call record:', callErr.message);
+  }
+
+  return {
+    call_id: callRecord?.id || null,
+    retell_call_id: retellCall.call_id,
+    status: 'initiated',
+    call: callRecord,
+  };
+}
+
+/**
+ * Get call status from Retell API.
+ */
+async function getRetellCallStatus(retellCallId) {
+  try {
+    const res = await axios.get(`${RETELL_API_BASE}/v2/get-call/${retellCallId}`, {
+      headers: retellHeaders,
+    });
+    return res.data;
+  } catch (err) {
+    console.error('[retell] Failed to get call status:', err.response?.data || err.message);
+    return null;
+  }
+}
+
+module.exports = { createRetellAgent, updateAgentForProspect, initiateOutboundCall, getRetellCallStatus };

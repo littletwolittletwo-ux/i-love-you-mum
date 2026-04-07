@@ -12,7 +12,7 @@ const supabase = require('./src/database/client');
 const { verifyConnection } = require('./src/database/client');
 const webhooks = require('./src/webhooks/index');
 const { generateAndSaveSoul } = require('./src/soul/generator');
-const { createRetellAgent, updateAgentForProspect } = require('./src/agents/retell');
+const { createRetellAgent, updateAgentForProspect, initiateOutboundCall, getRetellCallStatus } = require('./src/agents/retell');
 const { createVapiAgent } = require('./src/agents/vapi');
 const { deployRecallBot } = require('./src/agents/recall');
 const { createTavusReplica, createTavusPersona, createTavusConversation, endTavusConversation, getTavusConversationStatus } = require('./src/agents/tavus');
@@ -199,7 +199,7 @@ app.get('/health', async (req, res) => {
 //  DASHBOARD ROUTES — serve HTML pages
 // ============================================================
 app.get('/dashboard', (req, res) => {
-  res.sendFile('dashboard/signup.html', { root: path.join(__dirname, 'public') });
+  res.sendFile('dashboard/team.html', { root: path.join(__dirname, 'public') });
 });
 
 app.get('/dashboard/signup', (req, res) => {
@@ -207,6 +207,10 @@ app.get('/dashboard/signup', (req, res) => {
 });
 
 app.get('/dashboard/:clientId', (req, res) => {
+  // Don't match 'signup' as a clientId
+  if (req.params.clientId === 'signup') {
+    return res.sendFile('dashboard/signup.html', { root: path.join(__dirname, 'public') });
+  }
   res.sendFile('dashboard/client.html', { root: path.join(__dirname, 'public') });
 });
 
@@ -386,6 +390,7 @@ app.get('/prospects/:prospectId/memory', async (req, res) => {
 app.post('/calls/phone/:prospectId', async (req, res) => {
   try {
     const { prospectId } = req.params;
+    const { phone_number } = req.body || {};
 
     const { data: prospect } = await supabase
       .from('prospects')
@@ -394,60 +399,294 @@ app.post('/calls/phone/:prospectId', async (req, res) => {
       .single();
 
     if (!prospect) return res.status(404).json({ error: 'Prospect not found' });
-    if (!prospect.phone) return res.status(400).json({ error: 'Prospect has no phone number' });
 
-    const { data: client } = await supabase
+    const phoneToUse = phone_number || prospect.phone;
+    if (!phoneToUse) {
+      return res.status(400).json({ error: 'No phone number provided and prospect has no phone on file. Pass phone_number in request body.' });
+    }
+
+    // Update prospect phone if override provided
+    if (phone_number && phone_number !== prospect.phone) {
+      await supabase.from('prospects').update({ phone: phone_number }).eq('id', prospectId);
+    }
+
+    try {
+      const result = await initiateOutboundCall(prospectId, prospect.client_id, phoneToUse);
+      res.json(result);
+    } catch (err) {
+      console.error('[server] Retell call failed:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  } catch (err) {
+    console.error('[server] Phone call failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// POST /calls/quick — Quick call from dashboard "Call Me Now"
+// ============================================================
+app.post('/calls/quick', async (req, res) => {
+  try {
+    const { client_id, phone_number, prospect_name } = req.body;
+
+    if (!client_id || !phone_number) {
+      return res.status(400).json({ error: 'client_id and phone_number are required' });
+    }
+
+    // Check if RETELL_PHONE_NUMBER is set
+    const retellPhone = env.RETELL_PHONE_NUMBER || process.env.RETELL_PHONE_NUMBER;
+    if (!retellPhone) {
+      return res.status(400).json({
+        error: 'RETELL_PHONE_NUMBER not configured',
+        message: 'Go to app.retellai.com → Phone Numbers → Buy a number → then add RETELL_PHONE_NUMBER to your Railway env vars.',
+        setup_required: true,
+      });
+    }
+
+    // Verify client exists
+    const { data: client, error: clientErr } = await supabase
       .from('clients')
-      .select('retell_agent_id')
-      .eq('id', prospect.client_id)
+      .select('id, retell_agent_id, agent_name')
+      .eq('id', client_id)
       .single();
 
-    if (!client?.retell_agent_id) {
+    if (clientErr || !client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    if (!client.retell_agent_id) {
       return res.status(400).json({ error: 'No Retell agent configured for this client' });
     }
 
-    // Update agent with fresh prospect memory
-    await updateAgentForProspect(prospect.client_id, prospectId);
-
-    // Initiate outbound call via Retell
-    let retellCall = null;
-    try {
-      const callRes = await axios.post(`${RETELL_API_BASE}/create-phone-call`, {
-        agent_id: client.retell_agent_id,
-        customer_number: prospect.phone,
-      }, {
-        headers: {
-          'Authorization': `Bearer ${env.RETELL_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      retellCall = callRes.data;
-    } catch (err) {
-      const errMsg = err.response?.data || err.message;
-      console.error('[server] Retell call failed:', JSON.stringify(errMsg));
-      return res.status(500).json({ error: `Retell call failed: ${JSON.stringify(errMsg)}` });
-    }
-
-    // Create call record
-    const { data: callRecord } = await supabase
-      .from('calls')
-      .insert({
-        prospect_id: prospectId,
-        client_id: prospect.client_id,
-        retell_call_id: retellCall.call_id,
-        call_type: 'phone',
-        status: 'initiated',
-      })
-      .select()
+    // Find or create prospect
+    let prospect;
+    const { data: existing } = await supabase
+      .from('prospects')
+      .select('*')
+      .eq('client_id', client_id)
+      .eq('phone', phone_number)
       .single();
 
+    if (existing) {
+      prospect = existing;
+    } else {
+      const { data: newProspect, error: pErr } = await supabase
+        .from('prospects')
+        .insert({
+          client_id,
+          name: prospect_name || 'Test Call',
+          phone: phone_number,
+          funnel_stage: 'lead',
+        })
+        .select()
+        .single();
+
+      if (pErr) {
+        return res.status(500).json({ error: 'Failed to create prospect: ' + pErr.message });
+      }
+      prospect = newProspect;
+    }
+
+    // Initiate the call
+    const result = await initiateOutboundCall(prospect.id, client_id, phone_number);
+
     res.json({
-      call: callRecord,
-      retell_call_id: retellCall.call_id,
-      status: 'initiated',
+      ...result,
+      prospect_id: prospect.id,
+      prospect_name: prospect.name,
     });
   } catch (err) {
-    console.error('[server] Phone call failed:', err.message);
+    console.error('[quick-call] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// GET /calls/:callId/status — Live call status polling
+// ============================================================
+app.get('/calls/:callId/status', async (req, res) => {
+  try {
+    const { callId } = req.params;
+
+    const { data: call, error } = await supabase
+      .from('calls')
+      .select('*')
+      .eq('id', callId)
+      .single();
+
+    if (error || !call) {
+      return res.status(404).json({ error: 'Call not found' });
+    }
+
+    let retellStatus = null;
+    if (call.retell_call_id) {
+      retellStatus = await getRetellCallStatus(call.retell_call_id);
+    }
+
+    // Map status
+    let status = call.status || 'unknown';
+    if (retellStatus) {
+      const rStatus = retellStatus.call_status || retellStatus.status;
+      if (rStatus === 'registered' || rStatus === 'ongoing') status = 'in_progress';
+      else if (rStatus === 'ended') status = call.claude_analysis ? 'complete' : 'processing';
+      else if (rStatus === 'error') status = 'error';
+    }
+
+    res.json({
+      call_id: call.id,
+      status,
+      duration_seconds: retellStatus?.end_timestamp && retellStatus?.start_timestamp
+        ? Math.round((retellStatus.end_timestamp - retellStatus.start_timestamp) / 1000)
+        : call.duration_seconds || null,
+      transcript_ready: !!(call.transcript || retellStatus?.transcript),
+      claude_analysis: call.claude_analysis || null,
+      detection_risk_score: call.detection_risk_score || null,
+      retell_status: retellStatus?.call_status || retellStatus?.status || null,
+    });
+  } catch (err) {
+    console.error('[call-status] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  TEAM DASHBOARD API — aggregate endpoints for admin view
+// ============================================================
+
+// GET /api/team/clients — all clients
+app.get('/api/team/clients', async (req, res) => {
+  try {
+    const { data: clients, error } = await supabase
+      .from('clients')
+      .select('id, agent_name, business_name, retell_agent_id, vapi_agent_id, elevenlabs_voice_id, video_mode, created_at')
+      .order('created_at', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Get call counts per client
+    const clientIds = (clients || []).map(c => c.id);
+    let callCounts = {};
+    let lastCallDates = {};
+
+    if (clientIds.length > 0) {
+      const { data: calls } = await supabase
+        .from('calls')
+        .select('client_id, created_at')
+        .in('client_id', clientIds)
+        .order('created_at', { ascending: false });
+
+      if (calls) {
+        calls.forEach(c => {
+          callCounts[c.client_id] = (callCounts[c.client_id] || 0) + 1;
+          if (!lastCallDates[c.client_id]) lastCallDates[c.client_id] = c.created_at;
+        });
+      }
+    }
+
+    const enriched = (clients || []).map(c => ({
+      ...c,
+      call_count: callCounts[c.id] || 0,
+      last_call_date: lastCallDates[c.id] || null,
+    }));
+
+    res.json(enriched);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/team/stats — aggregate stats across all clients
+app.get('/api/team/stats', async (req, res) => {
+  try {
+    const { count: totalAgents } = await supabase
+      .from('clients')
+      .select('id', { count: 'exact', head: true });
+
+    const { count: totalCalls } = await supabase
+      .from('calls')
+      .select('id', { count: 'exact', head: true });
+
+    const { count: totalProspects } = await supabase
+      .from('prospects')
+      .select('id', { count: 'exact', head: true });
+
+    const { data: riskData } = await supabase
+      .from('calls')
+      .select('detection_risk_score')
+      .not('detection_risk_score', 'is', null);
+
+    let avgDetectionRisk = null;
+    if (riskData && riskData.length > 0) {
+      const sum = riskData.reduce((acc, r) => acc + (r.detection_risk_score || 0), 0);
+      avgDetectionRisk = (sum / riskData.length).toFixed(1);
+    }
+
+    res.json({
+      total_agents: totalAgents || 0,
+      total_calls: totalCalls || 0,
+      total_prospects: totalProspects || 0,
+      avg_detection_risk: avgDetectionRisk,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/team/calls — recent calls across all clients
+app.get('/api/team/calls', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+    const { data: calls, error } = await supabase
+      .from('calls')
+      .select('id, prospect_id, client_id, call_type, duration_seconds, outcome, detection_risk_score, call_summary, claude_analysis, status, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Enrich with prospect and client names
+    const prospectIds = [...new Set((calls || []).filter(c => c.prospect_id).map(c => c.prospect_id))];
+    const clientIds = [...new Set((calls || []).filter(c => c.client_id).map(c => c.client_id))];
+
+    let prospectMap = {};
+    let clientMap = {};
+
+    if (prospectIds.length > 0) {
+      const { data: prospects } = await supabase.from('prospects').select('id, name').in('id', prospectIds);
+      if (prospects) prospects.forEach(p => { prospectMap[p.id] = p.name; });
+    }
+
+    if (clientIds.length > 0) {
+      const { data: clients } = await supabase.from('clients').select('id, agent_name').in('id', clientIds);
+      if (clients) clients.forEach(c => { clientMap[c.id] = c.agent_name; });
+    }
+
+    const enriched = (calls || []).map(c => ({
+      ...c,
+      prospect_name: prospectMap[c.prospect_id] || 'Unknown',
+      agent_name: clientMap[c.client_id] || 'Unknown',
+    }));
+
+    res.json(enriched);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/team/prospects — all prospects across all clients
+app.get('/api/team/prospects', async (req, res) => {
+  try {
+    const { data: prospects, error } = await supabase
+      .from('prospects')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(prospects || []);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -887,6 +1126,34 @@ app.get('/api/clients/:clientId/prospects', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
 
     res.json(prospects || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/clients/:clientId/prospects — create prospect
+app.post('/api/clients/:clientId/prospects', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const { name, phone, email, pain_points, funnel_stage } = req.body;
+
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const { data: prospect, error } = await supabase
+      .from('prospects')
+      .insert({
+        client_id: clientId,
+        name,
+        phone: phone || null,
+        email: email || null,
+        pain_points: pain_points || null,
+        funnel_stage: funnel_stage || 'lead',
+      })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(prospect);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

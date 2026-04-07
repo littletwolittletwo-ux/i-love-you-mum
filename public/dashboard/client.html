@@ -12,6 +12,7 @@
   <header class="header">
     <div class="container">
       <div class="header-brand">
+        <a href="/dashboard" style="color:var(--text-muted);font-size:0.85rem;margin-right:0.75rem;text-decoration:none;">&larr; Back to Team Dashboard</a>
         <div class="logo">AC</div>
         <h1 id="headerTitle">Dashboard</h1>
       </div>
@@ -44,7 +45,8 @@
             <p class="text-muted" id="businessName" style="font-size:0.95rem;"></p>
           </div>
           <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
-            <button class="btn btn-primary btn-sm" onclick="openTestCallModal()">Test Call</button>
+            <button class="btn btn-primary btn-sm" onclick="openTestCallModal()">&#128222; Test Call</button>
+            <button class="btn btn-primary btn-sm" style="background:#7c3aed;" onclick="openRealCallModal()">&#128222; Call Me Now</button>
             <button class="btn btn-secondary btn-sm" onclick="copyWebhookUrl()">Copy Webhook URL</button>
             <button class="btn btn-ghost btn-sm" onclick="copyApiKey()">Copy API Key</button>
           </div>
@@ -239,6 +241,23 @@
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeTestCallModal()">Cancel</button>
         <button class="btn btn-primary" id="testCallBtn" onclick="runTestCall()">Run Test</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Real Call Modal -->
+  <div class="modal-overlay" id="realCallModal">
+    <div class="modal">
+      <h3 class="modal-title">&#128222; Call Me Now</h3>
+      <div class="form-group">
+        <label class="form-label" for="realPhone">Phone Number</label>
+        <input class="form-input" type="tel" id="realPhone" placeholder="+61400000000">
+        <div class="form-hint">Your phone number. We'll call you from the AI agent.</div>
+      </div>
+      <div id="realCallStatus" style="margin-top:1rem;padding:0.85rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);font-size:0.9rem;display:none;"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeRealCallModal()">Cancel</button>
+        <button class="btn btn-primary" id="realCallBtn" onclick="makeRealCall()">&#128222; Call Now</button>
       </div>
     </div>
   </div>
@@ -754,6 +773,69 @@
     function openVideoCallModal() {
       showToast('Creating video call link...', 'success');
       // This would normally open a modal to select prospect — simplified for now
+    }
+
+    // --- Real Call Modal ---
+    function openRealCallModal() {
+      document.getElementById('realCallModal').classList.add('active');
+      document.getElementById('realCallStatus').style.display = 'none';
+      const saved = localStorage.getItem('ai_closer_phone') || '';
+      document.getElementById('realPhone').value = saved;
+    }
+
+    function closeRealCallModal() {
+      document.getElementById('realCallModal').classList.remove('active');
+    }
+
+    async function makeRealCall() {
+      const phone = document.getElementById('realPhone').value.trim();
+      if (!phone) {
+        document.getElementById('realCallStatus').textContent = 'Please enter a phone number.';
+        document.getElementById('realCallStatus').style.display = 'block';
+        document.getElementById('realCallStatus').style.borderColor = 'var(--red)';
+        document.getElementById('realCallStatus').style.color = 'var(--red)';
+        return;
+      }
+
+      localStorage.setItem('ai_closer_phone', phone);
+
+      const btn = document.getElementById('realCallBtn');
+      btn.disabled = true;
+      btn.textContent = 'Calling...';
+
+      const statusEl = document.getElementById('realCallStatus');
+      statusEl.style.display = 'block';
+      statusEl.style.borderColor = 'var(--accent)';
+      statusEl.style.color = 'var(--accent)';
+      statusEl.textContent = 'Initiating call to ' + phone + '...';
+
+      try {
+        const res = await fetch('/calls/quick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: clientId,
+            phone_number: phone,
+            prospect_name: 'Test Call',
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || data.message || 'Call failed');
+
+        statusEl.style.borderColor = 'var(--green)';
+        statusEl.style.color = 'var(--green)';
+        statusEl.textContent = 'Call initiated! Call ID: ' + (data.call_id || data.retell_call_id || '--');
+
+        showToast('Call initiated!', 'success');
+      } catch (err) {
+        statusEl.style.borderColor = 'var(--red)';
+        statusEl.style.color = 'var(--red)';
+        statusEl.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '\u{1F4DE} Call Now';
+      }
     }
 
     // --- Start ---

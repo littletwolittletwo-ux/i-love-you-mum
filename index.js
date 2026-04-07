@@ -1487,6 +1487,24 @@ app.use((err, req, res, _next) => {
 });
 
 // ============================================================
+//  ADMIN — runtime config (secured by Supabase service role key)
+// ============================================================
+app.post('/admin/config', async (req, res) => {
+  const authKey = req.headers['x-admin-key'];
+  if (authKey !== env.SUPABASE_SERVICE_ROLE_KEY) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const { key, value } = req.body;
+  if (!key || !value) return res.status(400).json({ error: 'key and value required' });
+  const allowedKeys = ['RETELL_PHONE_NUMBER'];
+  if (!allowedKeys.includes(key)) return res.status(400).json({ error: 'Key not allowed' });
+  process.env[key] = value;
+  env[key] = value;
+  console.log(`[admin] Runtime config set: ${key}=${value}`);
+  res.json({ ok: true, key, message: 'Set at runtime. Will reset on next deploy.' });
+});
+
+// ============================================================
 //  START SERVER
 // ============================================================
 async function start() {

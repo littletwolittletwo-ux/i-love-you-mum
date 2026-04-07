@@ -24,6 +24,23 @@ async function createRetellAgent(clientId) {
 
   if (error || !client) throw new Error(`Client not found: ${clientId}`);
 
+  // Duplicate guard: if client already has a Retell agent, verify it exists before creating a new one
+  if (client.retell_agent_id) {
+    try {
+      const existing = await axios.get(`${RETELL_API_BASE}/get-agent/${client.retell_agent_id}`, {
+        headers: retellHeaders,
+      });
+      console.log(`[retell] Agent already exists: ${client.retell_agent_id} — skipping creation`);
+      return { agent_id: client.retell_agent_id, ...existing.data };
+    } catch (err) {
+      if (err.response?.status === 404) {
+        console.log(`[retell] Existing agent ${client.retell_agent_id} not found on Retell — creating new one`);
+      } else {
+        console.warn(`[retell] Could not verify existing agent: ${err.message} — creating new one`);
+      }
+    }
+  }
+
   const systemPrompt = await buildSystemPrompt(clientId, null);
 
   // Build tools

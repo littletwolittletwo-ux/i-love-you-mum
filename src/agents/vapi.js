@@ -21,6 +21,23 @@ async function createVapiAgent(clientId) {
 
   if (error || !client) throw new Error(`Client not found: ${clientId}`);
 
+  // Duplicate guard: if client already has a Vapi agent, verify it exists before creating a new one
+  if (client.vapi_agent_id) {
+    try {
+      const existing = await axios.get(`${VAPI_API_BASE}/assistant/${client.vapi_agent_id}`, {
+        headers: vapiHeaders,
+      });
+      console.log(`[vapi] Agent already exists: ${client.vapi_agent_id} — skipping creation`);
+      return existing.data;
+    } catch (err) {
+      if (err.response?.status === 404) {
+        console.log(`[vapi] Existing agent ${client.vapi_agent_id} not found on Vapi — creating new one`);
+      } else {
+        console.warn(`[vapi] Could not verify existing agent: ${err.message} — creating new one`);
+      }
+    }
+  }
+
   const fullPrompt = await buildSystemPrompt(clientId, null);
 
   const setterOverride = `${fullPrompt}

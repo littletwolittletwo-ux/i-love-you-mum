@@ -4,6 +4,7 @@ const path = require('path');
 
 const RAW_DIR = path.join(__dirname, 'raw');
 const PROCESSED_DIR = path.join(__dirname, 'processed');
+const PATTERNS_DIR = path.join(__dirname, 'patterns');
 
 /**
  * Download and process human conversation training data from Kaggle.
@@ -11,148 +12,263 @@ const PROCESSED_DIR = path.join(__dirname, 'processed');
 async function fetchAndProcess() {
   console.log('[kaggle] Starting dataset fetch and processing...\n');
 
-  // Step A: Download dataset
-  console.log('[kaggle] Downloading human conversation dataset...');
-  try {
-    fs.mkdirSync(RAW_DIR, { recursive: true });
-    fs.mkdirSync(PROCESSED_DIR, { recursive: true });
+  fs.mkdirSync(RAW_DIR, { recursive: true });
+  fs.mkdirSync(PROCESSED_DIR, { recursive: true });
+  fs.mkdirSync(PATTERNS_DIR, { recursive: true });
 
-    execSync(
-      `kaggle datasets download -d projjal1/human-conversation-training-data --unzip -p "${RAW_DIR}"`,
-      { stdio: 'pipe', timeout: 60000 }
-    );
-    console.log('[kaggle] Dataset downloaded.\n');
-  } catch (err) {
-    console.log('[kaggle] Kaggle download failed:', err.message);
-    console.log('[kaggle] Generating synthetic training data instead...\n');
-    generateFallbackData();
-    return;
+  // Download datasets if not already present
+  downloadDatasets();
+
+  // Parse all available data
+  const allTurns = [];
+
+  // Parse human_chat.txt — "Human 1:" / "Human 2:" format
+  const humanChatPath = path.join(RAW_DIR, 'human_chat.txt');
+  if (fs.existsSync(humanChatPath)) {
+    const turns = parseHumanChat(humanChatPath);
+    allTurns.push(...turns);
+    console.log(`[kaggle] human_chat.txt: ${turns.length} turn pairs`);
   }
 
-  // Step B: Process downloaded files
-  const files = fs.readdirSync(RAW_DIR).filter(f => f.endsWith('.csv') || f.endsWith('.json') || f.endsWith('.txt'));
-  console.log(`[kaggle] Found ${files.length} data files`);
-
-  let allConversations = [];
-
-  for (const file of files) {
-    const filePath = path.join(RAW_DIR, file);
-    const content = fs.readFileSync(filePath, 'utf8');
-
-    if (file.endsWith('.csv')) {
-      const lines = content.split('\n').filter(l => l.trim());
-      // Parse CSV — expect columns like speaker, text or similar
-      const conversations = parseCSV(lines);
-      allConversations.push(...conversations);
-    } else if (file.endsWith('.json')) {
-      try {
-        const data = JSON.parse(content);
-        if (Array.isArray(data)) allConversations.push(...data);
-      } catch {}
-    } else {
-      // Plain text — split by blank lines
-      const convos = content.split(/\n\s*\n/).filter(c => c.trim());
-      allConversations.push(...convos.map(c => ({ text: c })));
-    }
+  // Parse dialogs.txt — tab-separated pairs
+  const dialogsPath = path.join(RAW_DIR, 'dialogue', 'dialogs.txt');
+  if (fs.existsSync(dialogsPath)) {
+    const turns = parseDialogs(dialogsPath);
+    allTurns.push(...turns);
+    console.log(`[kaggle] dialogs.txt: ${turns.length} turn pairs`);
   }
 
-  console.log(`[kaggle] Parsed ${allConversations.length} raw conversations`);
+  // Parse Conversation.csv — CSV with question/answer columns
+  const convoCsvPath = path.join(RAW_DIR, '3k_convos', 'Conversation.csv');
+  if (fs.existsSync(convoCsvPath)) {
+    const turns = parseConversationCSV(convoCsvPath);
+    allTurns.push(...turns);
+    console.log(`[kaggle] Conversation.csv: ${turns.length} turn pairs`);
+  }
 
-  // Filter for quality
-  const filtered = allConversations.filter(c => {
-    const text = typeof c === 'string' ? c : (c.text || c.conversation || JSON.stringify(c));
-    const turns = text.split('\n').filter(l => l.trim()).length;
-    if (turns > 20 || turns < 2) return false; // natural length
-    if (/customer service|ticket|order number|account/i.test(text)) return false; // no CS
+  console.log(`\n[kaggle] Total raw turn pairs: ${allTurns.length}`);
+
+  // Filter for quality — natural, casual, not customer service
+  const filtered = filterTurns(allTurns);
+  console.log(`[kaggle] After quality filter: ${filtered.length} turns`);
+
+  // Deduplicate
+  const seen = new Set();
+  const unique = filtered.filter(t => {
+    const key = `${t.a.toLowerCase().trim()}|${t.b.toLowerCase().trim()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
-
-  const selected = filtered.slice(0, 500);
-  console.log(`[kaggle] Filtered to ${selected.length} quality conversations`);
+  console.log(`[kaggle] After dedup: ${unique.length} unique turns`);
 
   // Save processed conversations
   fs.writeFileSync(
     path.join(PROCESSED_DIR, 'human_conversations.json'),
-    JSON.stringify(selected, null, 2)
+    JSON.stringify(unique.slice(0, 1000), null, 2)
   );
 
-  // Step C: Build phrase library
-  const phraseLibrary = buildPhraseLibrary(selected);
+  // Build phrase library from real data
+  const phraseLibrary = buildPhraseLibrary(unique);
   fs.writeFileSync(
     path.join(PROCESSED_DIR, 'phrase_library.json'),
     JSON.stringify(phraseLibrary, null, 2)
   );
-  console.log(`[kaggle] Phrase library: ${Object.keys(phraseLibrary).map(k => `${k}: ${phraseLibrary[k].length}`).join(', ')}`);
+  console.log(`\n[kaggle] Phrase library:`);
+  for (const [k, v] of Object.entries(phraseLibrary)) {
+    console.log(`  ${k}: ${v.length}`);
+  }
 
-  // Step D: Build length stats
-  const lengthStats = buildLengthStats(selected);
+  // Build length stats
+  const lengthStats = buildLengthStats(unique);
   fs.writeFileSync(
     path.join(PROCESSED_DIR, 'length_stats.json'),
     JSON.stringify(lengthStats, null, 2)
   );
-  console.log(`[kaggle] Avg words/turn: ${lengthStats.avg_words}`);
-  console.log(`[kaggle] Distribution:`, JSON.stringify(lengthStats.distribution));
+  console.log(`\n[kaggle] Length stats:`);
+  console.log(`  Avg words/turn: ${lengthStats.avg_words}`);
+  console.log(`  Total turns: ${lengthStats.total_turns}`);
+  console.log(`  Distribution:`, JSON.stringify(lengthStats.distribution));
+
+  // Build extracted patterns
+  const patterns = buildExtractedPatterns(unique);
+  fs.writeFileSync(
+    path.join(PATTERNS_DIR, 'extracted_patterns.json'),
+    JSON.stringify(patterns, null, 2)
+  );
+  console.log(`\n[kaggle] Extracted ${patterns.example_exchanges.length} example exchanges`);
 
   console.log('\n[kaggle] All processing complete.');
+  return { totalTurns: unique.length, phraseLibrary, lengthStats, patterns };
 }
 
-function parseCSV(lines) {
-  if (lines.length < 2) return [];
-  const conversations = [];
-  let current = [];
+/**
+ * Download Kaggle datasets if not already present.
+ */
+function downloadDatasets() {
+  const datasets = [
+    { slug: 'projjal1/human-conversation-training-data', dir: RAW_DIR, check: 'human_chat.txt' },
+    { slug: 'endofnight17j03/dialogue-dataset', dir: path.join(RAW_DIR, 'dialogue'), check: 'dialogs.txt' },
+    { slug: 'kreeshrajani/3k-conversations-dataset-for-chatbot', dir: path.join(RAW_DIR, '3k_convos'), check: 'Conversation.csv' },
+  ];
 
-  for (let i = 1; i < lines.length; i++) {
-    const parts = lines[i].split(',');
-    if (parts.length >= 2) {
-      current.push(parts.slice(1).join(',').replace(/^"|"$/g, '').trim());
-      if (current.length >= 2 && (i === lines.length - 1 || Math.random() < 0.3)) {
-        conversations.push({ text: current.join('\n') });
-        current = [];
+  for (const ds of datasets) {
+    const checkPath = path.join(ds.dir, ds.check);
+    if (fs.existsSync(checkPath)) {
+      console.log(`[kaggle] ${ds.check} already exists — skipping download`);
+      continue;
+    }
+    try {
+      fs.mkdirSync(ds.dir, { recursive: true });
+      console.log(`[kaggle] Downloading ${ds.slug}...`);
+      execSync(
+        `kaggle datasets download -d ${ds.slug} --unzip -p "${ds.dir}"`,
+        { stdio: 'pipe', timeout: 60000 }
+      );
+      console.log(`[kaggle] Downloaded ${ds.slug}`);
+    } catch (err) {
+      console.log(`[kaggle] Failed to download ${ds.slug}: ${err.message}`);
+    }
+  }
+}
+
+/**
+ * Parse human_chat.txt — "Human 1:" / "Human 2:" alternating format.
+ * Conversations restart when "Human 1: Hi" or similar greeting appears.
+ */
+function parseHumanChat(filePath) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n').filter(l => l.trim());
+  const turns = [];
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    const lineA = lines[i];
+    const lineB = lines[i + 1];
+
+    // Extract speaker and text
+    const matchA = lineA.match(/^Human \d+:\s*(.+)$/);
+    const matchB = lineB.match(/^Human \d+:\s*(.+)$/);
+
+    if (matchA && matchB) {
+      const textA = matchA[1].trim();
+      const textB = matchB[1].trim();
+
+      // Skip very short or very long turns
+      if (textA.length >= 3 && textB.length >= 3 && textA.length <= 300 && textB.length <= 300) {
+        turns.push({ a: textA, b: textB });
       }
     }
   }
-  return conversations;
+
+  return turns;
 }
 
-function buildPhraseLibrary(conversations) {
+/**
+ * Parse dialogs.txt — tab-separated question/answer pairs.
+ */
+function parseDialogs(filePath) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n').filter(l => l.trim());
+  const turns = [];
+
+  for (const line of lines) {
+    const parts = line.split('\t');
+    if (parts.length >= 2) {
+      const a = parts[0].trim();
+      const b = parts[1].trim();
+      if (a.length >= 3 && b.length >= 3 && a.length <= 300 && b.length <= 300) {
+        turns.push({ a, b });
+      }
+    }
+  }
+
+  return turns;
+}
+
+/**
+ * Parse Conversation.csv — CSV with ,question,answer columns.
+ */
+function parseConversationCSV(filePath) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n').filter(l => l.trim());
+  const turns = [];
+
+  // Skip header
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    // Format: index,"question",answer or index,question,answer
+    const match = line.match(/^\d+,("?)(.+?)\1,(.+)$/);
+    if (match) {
+      const a = match[2].trim();
+      const b = match[3].trim();
+      if (a.length >= 3 && b.length >= 3 && a.length <= 300 && b.length <= 300) {
+        turns.push({ a, b });
+      }
+    }
+  }
+
+  return turns;
+}
+
+/**
+ * Filter for natural, casual conversation turns.
+ */
+function filterTurns(turns) {
+  const csPatterns = /customer service|ticket number|order number|account number|reference number|please hold|your call is important/i;
+  const botPatterns = /I am an AI|as an AI|I'm a bot|I don't have feelings|I can't experience/i;
+
+  return turns.filter(t => {
+    // No customer service
+    if (csPatterns.test(t.a) || csPatterns.test(t.b)) return false;
+    // No bot responses
+    if (botPatterns.test(t.a) || botPatterns.test(t.b)) return false;
+    // Response shouldn't be too short to learn from
+    if (t.b.split(/\s+/).length < 2) return false;
+    return true;
+  });
+}
+
+/**
+ * Build phrase library from real conversation data.
+ */
+function buildPhraseLibrary(turns) {
   const lib = {
     openers: [],
     agreements: [],
     disagreements: [],
     questions: [],
     empathy: [],
-    humour: [],
-    closers: [],
     transitions: [],
+    closers: [],
+    backchannels: [],
   };
 
-  const openerPatterns = /^(hey|hi|hello|what's up|how's it going|how you going|g'day|yo|sup)/i;
-  const agreementPatterns = /^(yeah|yep|right|exactly|totally|true|for sure|fair enough|100%|agreed)/i;
-  const disagreementPatterns = /^(nah|no way|I don't think|I disagree|not really|hmm I'm not sure)/i;
-  const questionPatterns = /\?$/;
-  const empathyPatterns = /(I hear you|that's tough|I get it|I feel you|that sucks|sorry to hear|understandable)/i;
-  const closerPatterns = /(bye|see ya|later|cheers|catch you|take care|talk soon|gotta go)/i;
-  const transitionPatterns = /^(anyway|so|but|look|honestly|here's the thing|speaking of|oh also)/i;
+  const openerRe = /^(hey|hi|hello|what's up|how's it going|how you going|g'day|yo|sup|how are you|how've you been|how's things|howdy)/i;
+  const agreeRe = /^(yeah|yep|right|exactly|totally|true|for sure|fair enough|100%|agreed|same|definitely|absolutely|sure|of course|yes)/i;
+  const disagreeRe = /^(nah|no way|I don't think|I disagree|not really|hmm|I'm not sure|I wouldn't say|well actually|but)/i;
+  const questionRe = /\?$/;
+  const empathyRe = /(I hear you|that's tough|I get it|I feel you|that sucks|sorry to hear|understandable|I know what you mean|I can imagine|that must be)/i;
+  const closerRe = /(bye|see ya|later|cheers|catch you|take care|talk soon|gotta go|see you|talk to you later|have a good)/i;
+  const transitionRe = /^(anyway|so|but|look|honestly|here's the thing|speaking of|oh also|by the way|well|actually|on another note)/i;
+  const backchannelRe = /^(mm|mhm|uh huh|right|yeah|ok|I see|gotcha|oh|ah|wow|huh|really|nice|cool|sweet|interesting)$/i;
 
-  for (const conv of conversations) {
-    const text = typeof conv === 'string' ? conv : (conv.text || conv.conversation || '');
-    const lines = text.split('\n').filter(l => l.trim());
+  for (const turn of turns) {
+    for (const text of [turn.a, turn.b]) {
+      const clean = text.trim();
+      if (!clean || clean.length > 80) continue;
 
-    for (const line of lines) {
-      const clean = line.replace(/^[A-Z][a-z]*:\s*/, '').trim();
-      if (!clean || clean.length > 100) continue;
-
-      if (openerPatterns.test(clean) && lib.openers.length < 50) lib.openers.push(clean);
-      if (agreementPatterns.test(clean) && lib.agreements.length < 50) lib.agreements.push(clean);
-      if (disagreementPatterns.test(clean) && lib.disagreements.length < 50) lib.disagreements.push(clean);
-      if (questionPatterns.test(clean) && lib.questions.length < 50) lib.questions.push(clean);
-      if (empathyPatterns.test(clean) && lib.empathy.length < 50) lib.empathy.push(clean);
-      if (closerPatterns.test(clean) && lib.closers.length < 50) lib.closers.push(clean);
-      if (transitionPatterns.test(clean) && lib.transitions.length < 50) lib.transitions.push(clean);
+      if (openerRe.test(clean) && lib.openers.length < 80) lib.openers.push(clean);
+      if (agreeRe.test(clean) && lib.agreements.length < 80) lib.agreements.push(clean);
+      if (disagreeRe.test(clean) && lib.disagreements.length < 80) lib.disagreements.push(clean);
+      if (questionRe.test(clean) && lib.questions.length < 80) lib.questions.push(clean);
+      if (empathyRe.test(clean) && lib.empathy.length < 80) lib.empathy.push(clean);
+      if (closerRe.test(clean) && lib.closers.length < 80) lib.closers.push(clean);
+      if (transitionRe.test(clean) && lib.transitions.length < 80) lib.transitions.push(clean);
+      if (backchannelRe.test(clean) && lib.backchannels.length < 80) lib.backchannels.push(clean);
     }
   }
 
-  // Deduplicate
+  // Deduplicate each category
   for (const key of Object.keys(lib)) {
     lib[key] = [...new Set(lib[key])];
   }
@@ -160,15 +276,16 @@ function buildPhraseLibrary(conversations) {
   return lib;
 }
 
-function buildLengthStats(conversations) {
+/**
+ * Build length statistics from real data.
+ */
+function buildLengthStats(turns) {
   const wordCounts = [];
 
-  for (const conv of conversations) {
-    const text = typeof conv === 'string' ? conv : (conv.text || conv.conversation || '');
-    const lines = text.split('\n').filter(l => l.trim());
-    for (const line of lines) {
-      const clean = line.replace(/^[A-Z][a-z]*:\s*/, '').trim();
-      if (clean) wordCounts.push(clean.split(/\s+/).length);
+  for (const turn of turns) {
+    for (const text of [turn.a, turn.b]) {
+      const words = text.trim().split(/\s+/).length;
+      wordCounts.push(words);
     }
   }
 
@@ -186,7 +303,6 @@ function buildLengthStats(conversations) {
     '50+': wordCounts.filter(w => w > 50).length,
   };
 
-  // Convert to percentages
   const total = wordCounts.length;
   for (const key of Object.keys(distribution)) {
     distribution[key] = Math.round((distribution[key] / total) * 100) + '%';
@@ -196,145 +312,53 @@ function buildLengthStats(conversations) {
 }
 
 /**
- * Generate fallback training data if Kaggle is unavailable.
+ * Build extracted patterns — select the best example exchanges.
  */
-function generateFallbackData() {
-  console.log('[kaggle] Generating fallback training data from known patterns...');
+function buildExtractedPatterns(turns) {
+  // Pick diverse, natural-sounding exchanges
+  const good = turns.filter(t => {
+    const aWords = t.a.split(/\s+/).length;
+    const bWords = t.b.split(/\s+/).length;
+    // Both sides should be conversational length
+    return aWords >= 3 && aWords <= 25 && bWords >= 3 && bWords <= 25;
+  });
 
-  const phraseLibrary = {
-    openers: [
-      "hey how you going",
-      "hey mate, got a sec?",
-      "how's things?",
-      "hey — quick one for you",
-      "g'day, you free for a chat?",
-      "hey, hope I'm not catching you at a bad time",
-      "how's your arvo going?",
-      "hey, just wanted to check in",
-      "how's the week treating you?",
-      "hey — you mentioned something last time that stuck with me"
-    ],
-    agreements: [
-      "yeah totally",
-      "yep that's it",
-      "100%",
-      "yeah nah yeah for sure",
-      "exactly right",
-      "spot on",
-      "yeah that makes sense",
-      "fair point",
-      "couldn't agree more",
-      "yeah look you're dead right"
-    ],
-    disagreements: [
-      "hmm I'm not so sure about that",
-      "nah I reckon it's more like...",
-      "look I'd push back a little on that",
-      "I hear you but...",
-      "yeah nah, not quite",
-      "mmm that's one way to look at it"
-    ],
-    questions: [
-      "what do you reckon?",
-      "how's that sitting with you?",
-      "does that make sense?",
-      "what's your take on that?",
-      "you with me?",
-      "how do you feel about that?",
-      "what's been the biggest challenge?",
-      "what would that look like for you?",
-      "if we could sort that out, would that change things?",
-      "what's holding you back from that?"
-    ],
-    empathy: [
-      "yeah I hear ya",
-      "that's fair, that's totally fair",
-      "look I get it",
-      "mate that's tough",
-      "understandable",
-      "yeah that'd be frustrating"
-    ],
-    humour: [
-      "ha, classic",
-      "yeah nah that tracks",
-      "well that escalated quickly",
-      "look we've all been there"
-    ],
-    closers: [
-      "cheers for that",
-      "legend, appreciate your time",
-      "catch you soon yeah?",
-      "no dramas, talk soon",
-      "beauty — I'll follow up",
-      "cheers mate"
-    ],
-    transitions: [
-      "look, here's the thing —",
-      "honestly,",
-      "so the way I see it,",
-      "at the end of the day,",
-      "oh actually — that reminds me,",
-      "you know what though,",
-      "anyway —",
-      "so on a different note,"
-    ]
+  // Shuffle and pick best 30
+  const shuffled = good.sort(() => Math.random() - 0.5);
+  const examples = shuffled.slice(0, 30);
+
+  // Extract filler phrases and informal patterns from responses
+  const fillers = new Set();
+  const informal = new Set();
+
+  for (const t of turns) {
+    const b = t.b.toLowerCase();
+    if (/\byeah\b/.test(b)) fillers.add('yeah');
+    if (/\blike\b/.test(b)) fillers.add('like');
+    if (/\byou know\b/.test(b)) fillers.add('you know');
+    if (/\bsort of\b/.test(b)) fillers.add('sort of');
+    if (/\bhonestly\b/.test(b)) fillers.add('honestly');
+    if (/\blook\b/.test(b)) fillers.add('look');
+    if (/\bI mean\b/.test(b)) fillers.add('I mean');
+    if (/\bright\b/.test(b)) fillers.add('right');
+    if (/\bkind of\b/.test(b)) fillers.add('kind of');
+    if (/\bactually\b/.test(b)) fillers.add('actually');
+    if (/\banyway\b/.test(b)) fillers.add('anyway');
+
+    if (/\bgonna\b/.test(b)) informal.add('gonna');
+    if (/\bwanna\b/.test(b)) informal.add('wanna');
+    if (/\bgotta\b/.test(b)) informal.add('gotta');
+    if (/\bdunno\b/.test(b)) informal.add('dunno');
+    if (/\bkinda\b/.test(b)) informal.add('kinda');
+    if (/\bsorta\b/.test(b)) informal.add('sorta');
+  }
+
+  return {
+    avg_response_words: Math.round(turns.reduce((s, t) => s + t.b.split(/\s+/).length, 0) / turns.length),
+    filler_phrases: [...fillers],
+    informal_patterns: [...informal],
+    example_exchanges: examples,
   };
-
-  const lengthStats = {
-    avg_words: 12,
-    total_turns: 500,
-    distribution: {
-      "1-5": "28%",
-      "6-10": "31%",
-      "11-20": "26%",
-      "21-50": "13%",
-      "50+": "2%"
-    }
-  };
-
-  const extractedPatterns = {
-    avg_response_words: 12,
-    filler_phrases: ["yeah", "like", "you know", "sort of", "honestly", "look", "I mean", "right"],
-    topic_transitions: ["anyway", "oh that reminds me", "on a different note", "so", "actually"],
-    urgency_patterns: ["need to sort this", "ASAP", "running out of time", "can't keep doing this"],
-    informal_patterns: ["gonna", "wanna", "gotta", "dunno", "reckon", "heaps", "keen"],
-    question_styles: ["direct and short", "softened with 'reckon'", "rhetorical with dry humour"],
-    emotional_expressions: ["stoked", "gutted", "over it", "buzzing", "keen as"],
-    example_exchanges: [
-      { a: "How you going?", b: "Yeah good, busy week though. You?" },
-      { a: "What do you reckon about the new approach?", b: "Look honestly I think it's the right call." },
-      { a: "I'm not sure it's worth the investment.", b: "Fair enough. What would make it worth it for you?" },
-      { a: "We've tried stuff like this before.", b: "Yeah? What happened?" },
-      { a: "That sounds expensive.", b: "Yep it's not cheap. But what's it costing you to not fix it?" },
-      { a: "I need to think about it.", b: "Course. What's the main thing you're weighing up?" },
-      { a: "Can you send me some info?", b: "Yeah for sure. What specifically would be useful?" },
-      { a: "I'm just not sure it's the right time.", b: "When would be?" },
-      { a: "My partner needs to be involved.", b: "Makes sense. What's their main concern usually?" },
-      { a: "That's a lot to take in.", b: "Yeah. What stood out most?" }
-    ]
-  };
-
-  fs.writeFileSync(
-    path.join(PROCESSED_DIR, 'phrase_library.json'),
-    JSON.stringify(phraseLibrary, null, 2)
-  );
-  fs.writeFileSync(
-    path.join(PROCESSED_DIR, 'length_stats.json'),
-    JSON.stringify(lengthStats, null, 2)
-  );
-  fs.writeFileSync(
-    path.join(PROCESSED_DIR, 'human_conversations.json'),
-    JSON.stringify(extractedPatterns.example_exchanges, null, 2)
-  );
-  fs.writeFileSync(
-    path.join(__dirname, 'patterns', 'extracted_patterns.json'),
-    JSON.stringify(extractedPatterns, null, 2)
-  );
-
-  console.log(`[kaggle] Phrase library: ${Object.keys(phraseLibrary).map(k => `${k}: ${phraseLibrary[k].length}`).join(', ')}`);
-  console.log(`[kaggle] Avg words/turn: ${lengthStats.avg_words}`);
-  console.log(`[kaggle] Distribution:`, JSON.stringify(lengthStats.distribution));
-  console.log('[kaggle] Fallback data generated successfully.\n');
 }
 
 // Run if called directly

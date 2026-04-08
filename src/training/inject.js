@@ -34,57 +34,66 @@ function loadTrainingData() {
 
 /**
  * Enhance a base system prompt with training data insights.
+ *
+ * Key insight: the Kaggle data gives us RHYTHM and LENGTH stats,
+ * but Sarah's VOICE comes from her soul document and australian_patterns.
+ * We use the Kaggle data for what it's good at (proving how short real
+ * responses are) and the curated data for her actual speech patterns.
  */
 async function buildTrainingEnhancedPrompt(basePrompt) {
   const data = loadTrainingData();
 
   const sections = [basePrompt];
 
-  if (data.lengthStats || data.phraseLibrary || data.patterns) {
-    sections.push('\nNATURAL HUMAN SPEECH PATTERNS (extracted from real conversations):');
-  }
-
+  // Length stats are the most valuable training signal —
+  // they prove to the LLM that real humans speak in 8-word bursts
   if (data.lengthStats) {
-    sections.push(`\nAverage human response: ${data.lengthStats.avg_words} words`);
+    sections.push('\nREAL CONVERSATION DATA (from 5,800+ human exchanges):');
+    sections.push(`Average human response: ${data.lengthStats.avg_words} words.`);
     if (data.lengthStats.distribution) {
       sections.push(`Response length distribution: ${Object.entries(data.lengthStats.distribution).map(([k, v]) => `${k} words: ${v}`).join(', ')}`);
     }
+    sections.push('This means: 79% of real human responses are 10 words or fewer. Match this.');
   }
 
-  if (data.phraseLibrary) {
-    const pl = data.phraseLibrary;
-    if (pl.openers?.length) {
-      sections.push(`\nNatural openers people actually use:\n${pl.openers.slice(0, 10).map(o => `- "${o}"`).join('\n')}`);
-    }
-    if (pl.agreements?.length) {
-      sections.push(`\nNatural agreements:\n${pl.agreements.slice(0, 10).map(o => `- "${o}"`).join('\n')}`);
-    }
-    if (pl.questions?.length) {
-      sections.push(`\nNatural questions:\n${pl.questions.slice(0, 10).map(o => `- "${o}"`).join('\n')}`);
-    }
-    if (pl.transitions?.length) {
-      sections.push(`\nNatural transitions:\n${pl.transitions.slice(0, 10).map(o => `- "${o}"`).join('\n')}`);
-    }
-    if (pl.closers?.length) {
-      sections.push(`\nNatural closers:\n${pl.closers.slice(0, 6).map(o => `- "${o}"`).join('\n')}`);
-    }
-  }
-
+  // Example exchanges — pick the most natural-sounding ones
+  // These teach rhythm, not content
   if (data.patterns?.example_exchanges?.length) {
-    sections.push('\nEXAMPLE NATURAL EXCHANGES (study these rhythms):');
-    const exchanges = data.patterns.example_exchanges.slice(0, 5);
-    for (const ex of exchanges) {
-      if (ex.a && ex.b) {
-        sections.push(`  Prospect: "${ex.a}"\n  Sarah: "${ex.b}"`);
+    // Filter for short, punchy exchanges that match Sarah's style
+    const goodExchanges = data.patterns.example_exchanges.filter(ex => {
+      if (!ex.a || !ex.b) return false;
+      const bWords = ex.b.split(/\s+/).length;
+      // Keep responses under 15 words — that's the rhythm we want
+      return bWords >= 2 && bWords <= 15;
+    });
+
+    if (goodExchanges.length > 0) {
+      sections.push('\nNATURAL CONVERSATION RHYTHMS (study these — notice how short the responses are):');
+      const selected = goodExchanges.slice(0, 8);
+      for (const ex of selected) {
+        sections.push(`  Them: "${ex.a}"\n  You: "${ex.b}"`);
       }
     }
   }
 
+  // Australian filler and slang — this is the voice layer
   if (data.ausSlang) {
     const aus = data.ausSlang;
-    if (aus.filler?.length) {
-      sections.push(`\nAustralian filler words to use naturally: ${aus.filler.join(', ')}`);
+    const slangParts = [];
+
+    if (aus.greetings?.length) slangParts.push(`Greetings: ${aus.greetings.join(', ')}`);
+    if (aus.acknowledgements?.length) slangParts.push(`Acknowledgements: ${aus.acknowledgements.join(', ')}`);
+    if (aus.filler?.length) slangParts.push(`Fillers: ${aus.filler.join(', ')}`);
+    if (aus.closers?.length) slangParts.push(`Closers: ${aus.closers.join(', ')}`);
+
+    if (slangParts.length > 0) {
+      sections.push(`\nYOUR AUSTRALIAN VOCABULARY (use naturally, don't force):\n${slangParts.join('\n')}`);
     }
+  }
+
+  // Backchannels from real data
+  if (data.phraseLibrary?.backchannels?.length) {
+    sections.push(`\nBackchannel words: ${data.phraseLibrary.backchannels.join(', ')}`);
   }
 
   return sections.join('\n');
@@ -99,11 +108,8 @@ async function updateSarahWithEnhancements() {
 
   console.log('[inject] Building enhanced prompt for Sarah...');
 
-  // Build base prompt
-  const basePrompt = await buildSystemPrompt(SARAH_CLIENT_ID, null);
-
-  // buildSystemPrompt already includes training enhancement + TTS fix
-  const enhancedPrompt = basePrompt;
+  // Build base prompt (already includes training enhancement)
+  const enhancedPrompt = await buildSystemPrompt(SARAH_CLIENT_ID, null);
 
   console.log(`[inject] Final prompt: ${enhancedPrompt.length} chars`);
   console.log(`[inject] Word count: ${enhancedPrompt.split(/\s+/).length}`);

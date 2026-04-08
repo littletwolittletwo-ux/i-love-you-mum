@@ -1,12 +1,13 @@
 const supabase = require('../database/client');
-const { buildSoulLayer, buildVoiceLayer, buildHardRules } = require('./soul');
+const { buildSoulLayer, buildVoiceLayer, buildSpeechRealismLayer, buildHardRules } = require('./soul');
 
 /**
- * Build the complete system prompt with four parts:
+ * Build the complete system prompt with five parts:
  * 1. Identity — who she is
  * 2. How She Talks — her voice, rhythm, patterns
- * 3. Hard Rules — non-negotiable constraints
- * 4. Context — what's happening right now (minimal capabilities only if enabled)
+ * 3. Speech Realism — thinking sounds, breathing, stutters, corrections, dynamics
+ * 4. Hard Rules — non-negotiable constraints
+ * 5. Context — what's happening right now
  */
 async function buildSystemPrompt(clientId, prospectId) {
   // Fetch client
@@ -35,10 +36,13 @@ async function buildSystemPrompt(clientId, prospectId) {
   // PART 2 — HOW SHE TALKS
   const voiceLayer = buildVoiceLayer(soul);
 
-  // PART 3 — HARD RULES
+  // PART 3 — SPEECH REALISM
+  const speechRealism = buildSpeechRealismLayer();
+
+  // PART 4 — HARD RULES
   const hardRules = buildHardRules();
 
-  // PART 4 — CONTEXT
+  // PART 5 — CONTEXT
   const contextLayer = buildContextLayer(client, prospectId);
 
   // Minimal capabilities — only if enabled, and kept short
@@ -61,6 +65,7 @@ async function buildSystemPrompt(clientId, prospectId) {
   let fullPrompt = [
     identityLayer,
     voiceLayer,
+    speechRealism,
     hardRules,
     contextLayer,
     capabilitiesLayer,

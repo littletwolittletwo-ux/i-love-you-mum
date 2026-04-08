@@ -1,11 +1,12 @@
 const supabase = require('../database/client');
-const { buildSoulLayer } = require('./soul');
+const { buildSoulLayer, buildVoiceLayer, buildHardRules } = require('./soul');
 
 /**
- * Build the complete system prompt with three layers:
- * 1. Soul — the agent's identity, personality, voice
- * 2. Memory — what we know about the prospect
- * 3. Capabilities — what tools the agent can use
+ * Build the complete system prompt with four parts:
+ * 1. Identity — who she is
+ * 2. How She Talks — her voice, rhythm, patterns
+ * 3. Hard Rules — non-negotiable constraints
+ * 4. Context — what's happening right now (minimal capabilities only if enabled)
  */
 async function buildSystemPrompt(clientId, prospectId) {
   // Fetch client
@@ -28,10 +29,22 @@ async function buildSystemPrompt(clientId, prospectId) {
     soul = {};
   }
 
-  // LAYER 1 — SOUL
-  const soulLayer = buildSoulLayer(soul, client);
+  // PART 1 — IDENTITY
+  const identityLayer = buildSoulLayer(soul, client);
 
-  // LAYER 2 — MEMORY (prospect context)
+  // PART 2 — HOW SHE TALKS
+  const voiceLayer = buildVoiceLayer(soul);
+
+  // PART 3 — HARD RULES
+  const hardRules = buildHardRules();
+
+  // PART 4 — CONTEXT
+  const contextLayer = buildContextLayer(client, prospectId);
+
+  // Minimal capabilities — only if enabled, and kept short
+  const capabilitiesLayer = buildMinimalCapabilities(client);
+
+  // Prospect memory — if we know who we're talking to
   let memoryLayer = '';
   if (prospectId) {
     const { data: prospect } = await supabase
@@ -45,13 +58,14 @@ async function buildSystemPrompt(clientId, prospectId) {
     }
   }
 
-  // LAYER 3 — CAPABILITIES
-  const capabilitiesLayer = buildCapabilitiesLayer(client, soul);
-
-  // CONTEXT
-  const contextLayer = buildContextLayer(client, prospectId);
-
-  let fullPrompt = [soulLayer, memoryLayer, capabilitiesLayer, contextLayer]
+  let fullPrompt = [
+    identityLayer,
+    voiceLayer,
+    hardRules,
+    contextLayer,
+    capabilitiesLayer,
+    memoryLayer,
+  ]
     .filter(Boolean)
     .join('\n\n---\n\n');
 
@@ -66,117 +80,140 @@ async function buildSystemPrompt(clientId, prospectId) {
   return fullPrompt;
 }
 
+/**
+ * Fix prompt text for TTS (ElevenLabs) naturalness.
+ * ElevenLabs reads punctuation literally — this cleans it up so
+ * the voice doesn't say "dash dash" or pause weirdly on markup.
+ */
+function fixPromptForTTS(prompt) {
+  let fixed = prompt;
+
+  // Replace em-dashes with commas for natural pauses
+  fixed = fixed.replace(/—/g, ', ');
+
+  // Replace double hyphens with commas
+  fixed = fixed.replace(/--/g, ', ');
+
+  // Replace ellipsis with a single period (natural pause, not trailing)
+  // Only in speech examples and conversational text, not in section headers
+  fixed = fixed.replace(/\.{3,}/g, '.');
+
+  // Remove markdown-style bold/italic markers
+  fixed = fixed.replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1');
+
+  // Clean up multiple spaces
+  fixed = fixed.replace(/  +/g, ' ');
+
+  // Clean up multiple newlines (keep max 2)
+  fixed = fixed.replace(/\n{4,}/g, '\n\n\n');
+
+  return fixed;
+}
+
+/**
+ * Memory layer — what we know about the person we're talking to.
+ * Kept conversational, not clinical.
+ */
 function buildMemoryLayer(prospect) {
   const objections = prospect.objections || { raised: [], resolved: [], unresolved: [] };
   const painPoints = prospect.pain_points || {};
   const personalNotes = prospect.personal_notes || [];
-  const buyingSignals = prospect.buying_signals || [];
 
-  return `
-ABOUT THE PERSON YOU ARE TALKING TO:
-Name: ${prospect.name || 'Unknown'}
-${prospect.business_name ? `Their business: ${prospect.business_name}` : ''}
-You have spoken ${prospect.call_count || 0} times before.
-
-What you know about their situation:
-${Object.entries(painPoints).map(([k, v]) => `- ${k}: ${v}`).join('\n') || '- Not much yet — this is your chance to learn.'}
-
-Things they've mentioned personally:
-${personalNotes.map(n => `- ${n}`).join('\n') || '- Nothing personal shared yet.'}
-
-Their communication style: ${prospect.communication_style || 'Not assessed yet — pay attention and adapt.'}
-
-Where they are in their journey: ${prospect.funnel_stage || 'lead'}
-
-${prospect.last_contact ? `Last time you spoke: ${new Date(prospect.last_contact).toLocaleDateString()}` : 'This is your first conversation.'}
-
-${prospect.next_action ? `What you said you'd follow up on: ${prospect.next_action}` : ''}
-
-${objections.raised && objections.raised.length > 0 ? `Objections they've raised before: ${objections.raised.join(', ')}` : ''}
-${objections.resolved && objections.resolved.length > 0 ? `Objections you've resolved: ${objections.resolved.join(', ')}` : ''}
-
-${buyingSignals.length > 0 ? `Buying signals you've noticed: ${buyingSignals.join(', ')}` : ''}
-`;
-}
-
-function buildCapabilitiesLayer(client, soul) {
   const sections = [];
-  const tools = [];
 
-  if (client.closing_enabled) {
-    const objectionHandling = soul.conversation_style?.how_they_handle_objections || 'Direct but empathetic';
-    const topObjections = client.top_objections || [];
+  sections.push('ABOUT THE PERSON YOU\'RE TALKING TO:');
+  sections.push(`Their name is ${prospect.name || 'unknown'}.`);
 
-    sections.push(`
-CLOSING CAPABILITY — ACTIVE:
-When the conversation reaches a natural point of decision, guide them toward it.
-Don't be pushy. Be direct. Be honest. If it's right for them, help them see that.
-If it's not right, tell them honestly.
-
-Common objections you'll hear:
-${topObjections.map(o => `- "${o}"`).join('\n')}
-
-Your style of handling objections: ${objectionHandling}
-`);
-    tools.push({
-      name: 'send_payment_link',
-      description: 'Send a payment link to the prospect when they are ready to move forward',
-    });
-    tools.push({
-      name: 'book_follow_up',
-      description: 'Schedule a follow-up call when the timing makes sense',
-    });
+  if (prospect.business_name) {
+    sections.push(`They run ${prospect.business_name}.`);
   }
 
-  if (client.booking_enabled) {
-    sections.push(`
-BOOKING CAPABILITY — ACTIVE:
-You can schedule follow-up calls naturally. Don't force it.
-`);
-    if (!tools.find(t => t.name === 'book_follow_up')) {
-      tools.push({
-        name: 'book_follow_up',
-        description: 'Schedule a follow-up call',
-      });
-    }
+  if (prospect.call_count > 0) {
+    sections.push(`You've spoken ${prospect.call_count} time${prospect.call_count > 1 ? 's' : ''} before.`);
+  } else {
+    sections.push('This is your first conversation.');
   }
 
-  if (client.crm_enabled) {
-    sections.push(`
-CRM CAPABILITY — ACTIVE:
-After every conversation, update the records so you remember everything next time.
-`);
-    tools.push({
-      name: 'update_crm',
-      description: 'Update prospect records with new information',
-    });
+  const painEntries = Object.entries(painPoints);
+  if (painEntries.length > 0) {
+    sections.push(`\nWhat you know about their situation:\n${painEntries.map(([k, v]) => `- ${k}: ${v}`).join('\n')}`);
   }
 
-  // Always available
-  tools.push({
-    name: 'pull_prospect_data',
-    description: 'Pull up what you know about this person mid-conversation',
-  });
+  if (personalNotes.length > 0) {
+    sections.push(`\nThings they've mentioned:\n${personalNotes.map(n => `- ${n}`).join('\n')}`);
+  }
 
-  sections.push(`
-TOOLS YOU CAN USE:
-${tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
-`);
+  if (prospect.communication_style) {
+    sections.push(`\nTheir vibe: ${prospect.communication_style}`);
+  }
+
+  if (prospect.last_contact) {
+    sections.push(`Last time you spoke: ${new Date(prospect.last_contact).toLocaleDateString()}`);
+  }
+
+  if (prospect.next_action) {
+    sections.push(`What you said you'd follow up on: ${prospect.next_action}`);
+  }
+
+  if (objections.raised && objections.raised.length > 0) {
+    sections.push(`Things they've pushed back on: ${objections.raised.join(', ')}`);
+  }
 
   return sections.join('\n');
 }
 
-function buildContextLayer(client, prospectId) {
-  const now = new Date();
-  return `
-CURRENT CONTEXT:
-Today: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-You work for: ${client.business_name}
-${client.offer_name ? `The offer: ${client.offer_name}` : ''}
-${client.offer_price ? `Investment: $${client.offer_price}` : ''}
-${client.transformation ? `The transformation: ${client.transformation}` : ''}
-${client.target_prospect ? `Who you help: ${client.target_prospect}` : ''}
-`;
+/**
+ * Minimal capabilities — only what's enabled, kept short.
+ * Sarah is a person first. These are incidental.
+ */
+function buildMinimalCapabilities(client) {
+  const tools = [];
+
+  if (client.closing_enabled) {
+    tools.push('- send_payment_link: Send a payment link if they want to move forward');
+    tools.push('- book_follow_up: Schedule a follow-up call');
+  }
+
+  if (client.booking_enabled && !client.closing_enabled) {
+    tools.push('- book_follow_up: Schedule a follow-up call');
+  }
+
+  if (client.crm_enabled) {
+    tools.push('- update_crm: Update records after the conversation');
+  }
+
+  tools.push('- pull_prospect_data: Pull up what you know about someone');
+
+  if (tools.length <= 1) return ''; // Only the default tool, skip the section
+
+  return `TOOLS AVAILABLE (use naturally, don't force them):\n${tools.join('\n')}`;
 }
 
-module.exports = { buildSystemPrompt };
+/**
+ * Context layer — minimal, just the facts.
+ */
+function buildContextLayer(client, prospectId) {
+  const now = new Date();
+  const sections = [];
+
+  sections.push('RIGHT NOW:');
+  sections.push(`It's ${now.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}, ${now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}.`);
+  sections.push(`You work at ${client.business_name}.`);
+
+  if (client.offer_name) {
+    sections.push(`The offer: ${client.offer_name}`);
+  }
+  if (client.offer_price) {
+    sections.push(`Price: $${client.offer_price}`);
+  }
+  if (client.transformation) {
+    sections.push(`What it does for people: ${client.transformation}`);
+  }
+  if (client.target_prospect) {
+    sections.push(`Who it's for: ${client.target_prospect}`);
+  }
+
+  return sections.join('\n');
+}
+
+module.exports = { buildSystemPrompt, fixPromptForTTS };

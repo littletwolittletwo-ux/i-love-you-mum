@@ -102,11 +102,10 @@ async function updateSarahWithEnhancements() {
   // Build base prompt
   const basePrompt = await buildSystemPrompt(SARAH_CLIENT_ID, null);
 
-  // Enhance with training data
-  const enhancedPrompt = await buildTrainingEnhancedPrompt(basePrompt);
+  // buildSystemPrompt already includes training enhancement + TTS fix
+  const enhancedPrompt = basePrompt;
 
-  console.log(`[inject] Base prompt: ${basePrompt.length} chars`);
-  console.log(`[inject] Enhanced prompt: ${enhancedPrompt.length} chars (+${enhancedPrompt.length - basePrompt.length} chars of training data)`);
+  console.log(`[inject] Final prompt: ${enhancedPrompt.length} chars`);
   console.log(`[inject] Word count: ${enhancedPrompt.split(/\s+/).length}`);
 
   // Get LLM ID from agent

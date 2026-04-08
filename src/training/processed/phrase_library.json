@@ -1,0 +1,78 @@
+{
+  "openers": [
+    "hey how you going",
+    "hey mate, got a sec?",
+    "how's things?",
+    "hey — quick one for you",
+    "g'day, you free for a chat?",
+    "hey, hope I'm not catching you at a bad time",
+    "how's your arvo going?",
+    "hey, just wanted to check in",
+    "how's the week treating you?",
+    "hey — you mentioned something last time that stuck with me"
+  ],
+  "agreements": [
+    "yeah totally",
+    "yep that's it",
+    "100%",
+    "yeah nah yeah for sure",
+    "exactly right",
+    "spot on",
+    "yeah that makes sense",
+    "fair point",
+    "couldn't agree more",
+    "yeah look you're dead right"
+  ],
+  "disagreements": [
+    "hmm I'm not so sure about that",
+    "nah I reckon it's more like...",
+    "look I'd push back a little on that",
+    "I hear you but...",
+    "yeah nah, not quite",
+    "mmm that's one way to look at it"
+  ],
+  "questions": [
+    "what do you reckon?",
+    "how's that sitting with you?",
+    "does that make sense?",
+    "what's your take on that?",
+    "you with me?",
+    "how do you feel about that?",
+    "what's been the biggest challenge?",
+    "what would that look like for you?",
+    "if we could sort that out, would that change things?",
+    "what's holding you back from that?"
+  ],
+  "empathy": [
+    "yeah I hear ya",
+    "that's fair, that's totally fair",
+    "look I get it",
+    "mate that's tough",
+    "understandable",
+    "yeah that'd be frustrating"
+  ],
+  "humour": [
+    "ha, classic",
+    "yeah nah that tracks",
+    "well that escalated quickly",
+    "look we've all been there"
+  ],
+  "closers": [
+    "cheers for that",
+    "legend, appreciate your time",
+    "catch you soon yeah?",
+    "no dramas, talk soon",
+    "beauty — I'll follow up",
+    "cheers mate"
+  ],
+  "transitions": [
+    "look, here's the thing —",
+    "honestly,",
+    "so the way I see it,",
+    "at the end of the day,",
+    "oh actually — that reminds me,",
+    "you know what though,",
+    "anyway —",
+    "so on a different note,"
+  ]
+}

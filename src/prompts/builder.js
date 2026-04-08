@@ -51,9 +51,17 @@ async function buildSystemPrompt(clientId, prospectId) {
   // CONTEXT
   const contextLayer = buildContextLayer(client, prospectId);
 
-  const fullPrompt = [soulLayer, memoryLayer, capabilitiesLayer, contextLayer]
+  let fullPrompt = [soulLayer, memoryLayer, capabilitiesLayer, contextLayer]
     .filter(Boolean)
     .join('\n\n---\n\n');
+
+  // Enhance with training data if available
+  try {
+    const { buildTrainingEnhancedPrompt } = require('../training/inject');
+    fullPrompt = await buildTrainingEnhancedPrompt(fullPrompt);
+  } catch (err) {
+    // Training data not available — use base prompt
+  }
 
   return fullPrompt;
 }

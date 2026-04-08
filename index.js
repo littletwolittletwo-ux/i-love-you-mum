@@ -1518,6 +1518,14 @@ async function start() {
   // Run migrations
   await runMigrations();
 
+  // Load training data into memory for zero-latency prompt injection
+  try {
+    const { initTrainingCache } = require('./src/training/cache');
+    initTrainingCache();
+  } catch (err) {
+    console.log('[server] Training cache not available:', err.message);
+  }
+
   const server = app.listen(env.PORT, () => {
     console.log('\n===================================');
     console.log('  AI Closer Platform — LIVE');

@@ -1,0 +1,89 @@
+{
+  "avg_response_words": 12,
+  "filler_phrases": [
+    "yeah",
+    "like",
+    "you know",
+    "sort of",
+    "honestly",
+    "look",
+    "I mean",
+    "right"
+  ],
+  "topic_transitions": [
+    "anyway",
+    "oh that reminds me",
+    "on a different note",
+    "so",
+    "actually"
+  ],
+  "urgency_patterns": [
+    "need to sort this",
+    "ASAP",
+    "running out of time",
+    "can't keep doing this"
+  ],
+  "informal_patterns": [
+    "gonna",
+    "wanna",
+    "gotta",
+    "dunno",
+    "reckon",
+    "heaps",
+    "keen"
+  ],
+  "question_styles": [
+    "direct and short",
+    "softened with 'reckon'",
+    "rhetorical with dry humour"
+  ],
+  "emotional_expressions": [
+    "stoked",
+    "gutted",
+    "over it",
+    "buzzing",
+    "keen as"
+  ],
+  "example_exchanges": [
+    {
+      "a": "How you going?",
+      "b": "Yeah good, busy week though. You?"
+    },
+    {
+      "a": "What do you reckon about the new approach?",
+      "b": "Look honestly I think it's the right call."
+    },
+    {
+      "a": "I'm not sure it's worth the investment.",
+      "b": "Fair enough. What would make it worth it for you?"
+    },
+    {
+      "a": "We've tried stuff like this before.",
+      "b": "Yeah? What happened?"
+    },
+    {
+      "a": "That sounds expensive.",
+      "b": "Yep it's not cheap. But what's it costing you to not fix it?"
+    },
+    {
+      "a": "I need to think about it.",
+      "b": "Course. What's the main thing you're weighing up?"
+    },
+    {
+      "a": "Can you send me some info?",
+      "b": "Yeah for sure. What specifically would be useful?"
+    },
+    {
+      "a": "I'm just not sure it's the right time.",
+      "b": "When would be?"
+    },
+    {
+      "a": "My partner needs to be involved.",
+      "b": "Makes sense. What's their main concern usually?"
+    },
+    {
+      "a": "That's a lot to take in.",
+      "b": "Yeah. What stood out most?"
+    }
+  ]
+}

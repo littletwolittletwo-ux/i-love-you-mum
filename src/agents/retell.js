@@ -81,8 +81,15 @@ async function createRetellAgent(clientId) {
       llm_id: llmId,
     },
     voice_id: '11labs-Willa',
+    voice_model: 'eleven_v3',
     language: 'en-US',
+    voice_speed: 1.0,
+    voice_temperature: 1.0,
+    responsiveness: 1.0,
     interruption_sensitivity: 0.8,
+    enable_backchannel: true,
+    backchannel_frequency: 0.8,
+    backchannel_words: ['yeah', 'right', 'totally', 'mm', 'uh huh', 'for sure', 'exactly'],
   };
 
   try {

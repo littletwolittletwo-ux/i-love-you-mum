@@ -14,7 +14,7 @@ from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
 
 from processors.fish_tts import FishAudioTTSService
 from processors.transcript_collector import TranscriptCollector
@@ -83,7 +83,7 @@ async def create_twilio_pipeline(
     collector = TranscriptCollector(on_call_end=session.on_call_end)
 
     messages = [{"role": "system", "content": session.system_prompt}]
-    context = OpenAILLMContext(messages)
+    context = LLMContext(messages)
     context_aggregator = llm.create_context_aggregator(context)
 
     pipeline = Pipeline(

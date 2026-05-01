@@ -9,7 +9,7 @@ from pipecat.transports.websocket.server import (
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
 
 from processors.fish_tts import FishAudioTTSService
 from processors.raw_serializer import RawAudioSerializer
@@ -63,7 +63,7 @@ async def create_pipeline(session: CallSession):
 
     # Build context with system prompt
     messages = [{"role": "system", "content": session.system_prompt}]
-    context = OpenAILLMContext(messages)
+    context = LLMContext(messages)
     context_aggregator = llm.create_context_aggregator(context)
 
     pipeline = Pipeline(

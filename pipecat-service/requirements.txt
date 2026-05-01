@@ -7,3 +7,4 @@ uvicorn[standard]
 onnxruntime
 twilio
 aiohttp
+certifi

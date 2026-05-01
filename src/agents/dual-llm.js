@@ -85,6 +85,12 @@ function buildMessages(transcriptArray) {
  * Honours AbortSignal so callers can cancel mid-flight.
  */
 async function streamGrok({ systemPrompt, messages, buffer, signal }) {
+  if (!env.XAI_API_KEY) {
+    buffer.error = new Error('XAI_API_KEY not set — Grok fast-lane unavailable');
+    buffer.done = true;
+    return;
+  }
+
   const res = await axios.post(
     'https://api.x.ai/v1/chat/completions',
     {
@@ -259,6 +265,7 @@ async function streamFinalResponse({ callId, transcriptArray, onToken }) {
     session.pending = null;
   }
 
+  console.log(`[dual-llm] no usable prediction — streaming fresh from ${lane}`);
   const messages = buildMessages(transcriptArray);
   const buffer = makeBuffer();
   let i = 0;
@@ -269,6 +276,13 @@ async function streamFinalResponse({ callId, transcriptArray, onToken }) {
   try {
     if (useFast) {
       await streamGrok({ systemPrompt: session.systemPrompt, messages, buffer, signal: undefined });
+      // If Grok returned an error (e.g. no API key), fall back to Sonnet
+      if (buffer.error && buffer.tokens.length === 0) {
+        console.warn(`[dual-llm] Grok failed (${buffer.error.message}) — falling back to SONNET`);
+        buffer.error = null;
+        buffer.done = false;
+        await streamSonnet({ systemPrompt: session.systemPrompt, messages, buffer, signal: undefined });
+      }
     } else {
       await streamSonnet({ systemPrompt: session.systemPrompt, messages, buffer, signal: undefined });
     }
@@ -276,7 +290,7 @@ async function streamFinalResponse({ callId, transcriptArray, onToken }) {
     clearInterval(flushLoop);
     while (i < buffer.tokens.length) onToken(buffer.tokens[i++]);
   }
-  console.log(`[dual-llm] ${lane} done in ${Date.now() - startedAt}ms (cold)`);
+  console.log(`[dual-llm] ${lane} done in ${Date.now() - startedAt}ms (fresh)`);
 }
 
 module.exports = {

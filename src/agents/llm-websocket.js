@@ -70,7 +70,6 @@ async function handleConnection(ws, callId) {
 
         case 'update_only':
           if (!systemPromptLoaded) return;
-          // User is mid-utterance — fire pre-generations
           dualLLM.predictResponses(callId, msg.transcript || []);
           break;
 

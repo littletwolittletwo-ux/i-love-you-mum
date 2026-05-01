@@ -4,14 +4,90 @@ const { RETELL_API_BASE } = require('../../config/constants');
 const supabase = require('../database/client');
 const { buildSystemPrompt } = require('../prompts/builder');
 
+const FISH_AUDIO_PROVIDER_VOICE_ID = '662c531048e24e5ba3fe2b28092ded46';
+const SARAH_CLIENT_ID = '9d3cd726-c57b-470d-9b18-24361a119496';
+
 const retellHeaders = {
   'Authorization': `Bearer ${env.RETELL_API_KEY}`,
   'Content-Type': 'application/json',
 };
 
 /**
- * Create a Retell LLM + Agent for a client.
- * Retell requires: 1) create LLM with prompt/tools, 2) create agent referencing LLM.
+ * Build the wss:// URL for the custom-LLM WebSocket handler.
+ * Handles http→ws and https→wss replacement.
+ */
+function getWebSocketUrl() {
+  const base = env.BASE_URL || process.env.BASE_URL || '';
+  return `${base.replace(/^http/, 'ws')}/llm-websocket`;
+}
+
+/**
+ * Register a Fish Audio voice with Retell so it can be used in agents.
+ * Returns the Retell-assigned voice_id for the Fish Audio voice.
+ */
+async function registerFishVoice() {
+  console.log(`[retell] Registering Fish Audio voice (provider_voice_id=${FISH_AUDIO_PROVIDER_VOICE_ID})...`);
+
+  try {
+    const res = await axios.post(`${RETELL_API_BASE}/add-community-voice`, {
+      voice_provider: 'fish_audio',
+      provider_voice_id: FISH_AUDIO_PROVIDER_VOICE_ID,
+    }, {
+      headers: retellHeaders,
+    });
+
+    const voiceId = res.data.voice_id;
+    console.log(`[retell] Fish Audio voice registered: ${voiceId}`);
+    return voiceId;
+  } catch (err) {
+    // If voice already exists, Retell may return a conflict — try to extract the existing voice_id
+    if (err.response?.status === 409 || err.response?.data?.voice_id) {
+      const existingId = err.response?.data?.voice_id;
+      if (existingId) {
+        console.log(`[retell] Fish Audio voice already registered: ${existingId}`);
+        return existingId;
+      }
+    }
+    const errMsg = err.response?.data || err.message;
+    console.error('[retell] Fish Audio voice registration failed:', JSON.stringify(errMsg));
+    throw new Error(`Fish Audio voice registration failed: ${JSON.stringify(errMsg)}`);
+  }
+}
+
+/**
+ * Register the Fish Audio voice and update a client's record with it.
+ * Stores the Retell voice_id in the elevenlabs_voice_id column (legacy name).
+ */
+async function registerFishVoiceForClient(clientId) {
+  const voiceId = await registerFishVoice();
+
+  await supabase
+    .from('clients')
+    .update({ elevenlabs_voice_id: voiceId })
+    .eq('id', clientId);
+
+  console.log(`[retell] Client ${clientId} updated with Fish voice_id: ${voiceId}`);
+  return voiceId;
+}
+
+/**
+ * Get the voice_id for a client. If they have one stored (elevenlabs_voice_id column),
+ * use it. Otherwise register Fish Audio and save it.
+ */
+async function resolveVoiceId(client) {
+  if (client.elevenlabs_voice_id) {
+    console.log(`[retell] Using stored voice_id: ${client.elevenlabs_voice_id}`);
+    return client.elevenlabs_voice_id;
+  }
+
+  // Register Fish Audio voice and save to client
+  console.log(`[retell] No voice_id stored for client ${client.id} — registering Fish Audio voice`);
+  return registerFishVoiceForClient(client.id);
+}
+
+/**
+ * Create a Retell Agent for a client with custom-LLM response engine
+ * and Fish Audio voice.
  */
 async function createRetellAgent(clientId) {
   console.log(`[retell] Creating Retell agent for client ${clientId}...`);
@@ -30,7 +106,22 @@ async function createRetellAgent(clientId) {
       const existing = await axios.get(`${RETELL_API_BASE}/get-agent/${client.retell_agent_id}`, {
         headers: retellHeaders,
       });
-      console.log(`[retell] Agent already exists: ${client.retell_agent_id} — skipping creation`);
+
+      // Verify the existing agent has the correct config; update if needed
+      const agent = existing.data;
+      const wsUrl = getWebSocketUrl();
+      const needsUpdate =
+        agent.response_engine?.type !== 'custom-llm' ||
+        agent.response_engine?.llm_websocket_url !== wsUrl;
+
+      if (needsUpdate) {
+        console.log(`[retell] Agent ${client.retell_agent_id} exists but config is stale — updating`);
+        const voiceId = await resolveVoiceId(client);
+        await updateRetellAgent(client.retell_agent_id, voiceId);
+      } else {
+        console.log(`[retell] Agent already exists and config is correct: ${client.retell_agent_id}`);
+      }
+
       return { agent_id: client.retell_agent_id, ...existing.data };
     } catch (err) {
       if (err.response?.status === 404) {
@@ -41,17 +132,20 @@ async function createRetellAgent(clientId) {
     }
   }
 
-  const systemPrompt = await buildSystemPrompt(clientId, null);
+  // Resolve the Fish Audio voice_id (register if needed)
+  const voiceId = await resolveVoiceId(client);
 
-  // Create Agent with custom-llm response engine (dual-LLM WebSocket handler)
+  const wsUrl = getWebSocketUrl();
+  console.log(`[retell] WebSocket URL: ${wsUrl}`);
+
+  // Create Agent with custom-llm response engine pointing to our dual-LLM WebSocket
   const agentPayload = {
-    agent_name: client.agent_name,
+    agent_name: client.agent_name || `Agent-${clientId.slice(0, 8)}`,
     response_engine: {
       type: 'custom-llm',
-      llm_websocket_url: `${(env.BASE_URL || process.env.BASE_URL || '').replace(/^http/, 'ws')}/llm-websocket`,
+      llm_websocket_url: wsUrl,
     },
-    voice_id: '11labs-Willa',
-    voice_model: 'eleven_v3',
+    voice_id: voiceId,
     language: 'en-US',
     voice_speed: 1.0,
     voice_temperature: 1.0,
@@ -68,9 +162,9 @@ async function createRetellAgent(clientId) {
     });
 
     const agentId = agentRes.data.agent_id;
-    console.log(`[retell] Agent created: ${agentId}`);
+    console.log(`[retell] Agent created: ${agentId} (voice: ${voiceId}, engine: custom-llm)`);
 
-    // Save both IDs
+    // Save agent ID
     await supabase
       .from('clients')
       .update({ retell_agent_id: agentId })
@@ -81,6 +175,33 @@ async function createRetellAgent(clientId) {
     const errMsg = err.response?.data || err.message;
     console.error('[retell] Agent creation failed:', JSON.stringify(errMsg));
     throw new Error(`Retell agent creation failed: ${JSON.stringify(errMsg)}`);
+  }
+}
+
+/**
+ * Update an existing Retell agent with correct config.
+ */
+async function updateRetellAgent(agentId, voiceId) {
+  const wsUrl = getWebSocketUrl();
+
+  const updatePayload = {
+    response_engine: {
+      type: 'custom-llm',
+      llm_websocket_url: wsUrl,
+    },
+    voice_id: voiceId,
+  };
+
+  try {
+    const res = await axios.patch(`${RETELL_API_BASE}/update-agent/${agentId}`, updatePayload, {
+      headers: retellHeaders,
+    });
+    console.log(`[retell] Agent ${agentId} updated (voice: ${voiceId}, engine: custom-llm, ws: ${wsUrl})`);
+    return res.data;
+  } catch (err) {
+    const errMsg = err.response?.data || err.message;
+    console.error(`[retell] Agent update failed for ${agentId}:`, JSON.stringify(errMsg));
+    throw new Error(`Retell agent update failed: ${JSON.stringify(errMsg)}`);
   }
 }
 
@@ -186,4 +307,14 @@ async function getRetellCallStatus(retellCallId) {
   }
 }
 
-module.exports = { createRetellAgent, updateAgentForProspect, initiateOutboundCall, getRetellCallStatus };
+module.exports = {
+  createRetellAgent,
+  updateRetellAgent,
+  updateAgentForProspect,
+  initiateOutboundCall,
+  getRetellCallStatus,
+  registerFishVoice,
+  registerFishVoiceForClient,
+  FISH_AUDIO_PROVIDER_VOICE_ID,
+  SARAH_CLIENT_ID,
+};

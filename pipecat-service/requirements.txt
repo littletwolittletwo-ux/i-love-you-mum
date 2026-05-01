@@ -2,5 +2,8 @@ pipecat-ai[deepgram,anthropic,websocket]
 python-dotenv
 httpx
 fastapi
+python-multipart
 uvicorn[standard]
 onnxruntime
+twilio
+aiohttp

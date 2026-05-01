@@ -13,6 +13,8 @@ const { verifyConnection } = require('./src/database/client');
 const webhooks = require('./src/webhooks/index');
 const { generateAndSaveSoul } = require('./src/soul/generator');
 const { createRetellAgent, updateAgentForProspect, initiateOutboundCall, getRetellCallStatus } = require('./src/agents/retell');
+const http = require('http');
+const llmWebsocket = require('./src/agents/llm-websocket');
 const { createVapiAgent } = require('./src/agents/vapi');
 const { deployRecallBot } = require('./src/agents/recall');
 const { createTavusReplica, createTavusPersona, createTavusConversation, endTavusConversation, getTavusConversationStatus } = require('./src/agents/tavus');
@@ -55,6 +57,17 @@ checkRequiredEnvVars([
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
 ]);
+
+// Soft-required: warn but don't exit
+const softRequired = [
+  { keys: ['XAI_API_KEY'], feature: 'Grok fast-lane disabled, all calls will use Sonnet' },
+];
+for (const { keys, feature } of softRequired) {
+  const missing = keys.filter(k => !env[k] && !process.env[k]);
+  if (missing.length > 0) {
+    console.warn(`[env] Missing ${missing.join(', ')} — ${feature}`);
+  }
+}
 
 // ============================================================
 //  GLOBAL ERROR HANDLERS
@@ -1478,6 +1491,142 @@ app.get('/api/secure/calls/:callId/full', apiKeyAuth, async (req, res) => {
 });
 
 // ============================================================
+//  PIPECAT MEMORY ENDPOINTS — Sprint 3
+// ============================================================
+
+const { processCallWithClaude } = require('./src/memory/processor');
+
+// Search prospects by phone number
+app.get('/api/secure/prospects', apiKeyAuth, async (req, res) => {
+  try {
+    const phone = req.query.phone;
+    if (!phone) return res.status(400).json({ error: 'phone query param required' });
+
+    const { data: prospects, error } = await supabase
+      .from('prospects')
+      .select('*')
+      .eq('client_id', req.client.id)
+      .eq('phone', phone)
+      .limit(1);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(prospects || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create prospect
+app.post('/api/secure/prospects', apiKeyAuth, async (req, res) => {
+  try {
+    const { client_id, name, phone, funnel_stage, call_count } = req.body;
+    const effectiveClientId = client_id || req.client.id;
+
+    if (effectiveClientId !== req.client.id) {
+      return res.status(403).json({ error: 'Client mismatch' });
+    }
+
+    const { data: prospect, error } = await supabase
+      .from('prospects')
+      .insert({
+        client_id: effectiveClientId,
+        name: name || 'Unknown',
+        phone: phone || null,
+        funnel_stage: funnel_stage || 'lead',
+        call_count: call_count || 0,
+      })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(prospect);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get single prospect
+app.get('/api/secure/prospects/:prospectId', apiKeyAuth, async (req, res) => {
+  try {
+    const { prospectId } = req.params;
+    const { data: prospect, error } = await supabase
+      .from('prospects')
+      .select('*')
+      .eq('id', prospectId)
+      .eq('client_id', req.client.id)
+      .single();
+
+    if (error || !prospect) return res.status(404).json({ error: 'Prospect not found' });
+    res.json(prospect);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update prospect (PATCH)
+app.patch('/api/secure/prospects/:prospectId', apiKeyAuth, async (req, res) => {
+  try {
+    const { prospectId } = req.params;
+    const updates = req.body;
+
+    const { data: prospect, error } = await supabase
+      .from('prospects')
+      .update(updates)
+      .eq('id', prospectId)
+      .eq('client_id', req.client.id)
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(prospect);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create call record
+app.post('/api/secure/calls', apiKeyAuth, async (req, res) => {
+  try {
+    const { prospect_id, client_id, call_type, transcript, status } = req.body;
+    const effectiveClientId = client_id || req.client.id;
+
+    if (effectiveClientId !== req.client.id) {
+      return res.status(403).json({ error: 'Client mismatch' });
+    }
+
+    const { data: call, error } = await supabase
+      .from('calls')
+      .insert({
+        prospect_id,
+        client_id: effectiveClientId,
+        call_type: call_type || 'phone',
+        transcript: transcript || '',
+        status: status || 'ended',
+      })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(call);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Process transcript with Claude (trigger memory analysis)
+app.post('/api/secure/calls/:callId/process-transcript', apiKeyAuth, async (req, res) => {
+  try {
+    const { callId } = req.params;
+
+    const analysis = await processCallWithClaude(callId);
+    res.json({ call_id: callId, claude_analysis: analysis });
+  } catch (err) {
+    console.error('[memory] Process transcript error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 //  GLOBAL ERROR HANDLER — must be last middleware
 // ============================================================
 app.use((err, req, res, _next) => {
@@ -1526,7 +1675,10 @@ async function start() {
     console.log('[server] Training cache not available:', err.message);
   }
 
-  const server = app.listen(env.PORT, () => {
+  const server = http.createServer(app);
+  llmWebsocket.attach(server);
+
+  server.listen(env.PORT, () => {
     console.log('\n===================================');
     console.log('  AI Closer Platform — LIVE');
     console.log('===================================');
@@ -1585,9 +1737,8 @@ async function start() {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
-    } else {
-      socket.destroy();
     }
+    // Other upgrade handlers (e.g., /llm-websocket) are attached separately
   });
   wss.on('connection', (ws, req) => {
     const urlParts = (req.url || '').split('/');

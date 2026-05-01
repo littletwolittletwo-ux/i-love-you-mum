@@ -34,7 +34,11 @@ async def get_system_prompt(
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(url, headers={"X-API-Key": API_KEY})
             resp.raise_for_status()
-            prompt = resp.text
+            try:
+                data = resp.json()
+                prompt = data.get("prompt", resp.text)
+            except Exception:
+                prompt = resp.text
             if len(prompt) > 100:
                 print(f"[loader] Got system prompt from Node.js: {len(prompt)} chars")
                 return prompt

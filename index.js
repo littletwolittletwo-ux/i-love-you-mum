@@ -12,7 +12,7 @@ const supabase = require('./src/database/client');
 const { verifyConnection } = require('./src/database/client');
 const webhooks = require('./src/webhooks/index');
 const { generateAndSaveSoul } = require('./src/soul/generator');
-const { createRetellAgent, updateAgentForProspect, initiateOutboundCall, getRetellCallStatus } = require('./src/agents/retell');
+const { createRetellAgent, updateRetellAgent, updateAgentForProspect, initiateOutboundCall, getRetellCallStatus, registerFishVoiceForClient, SARAH_CLIENT_ID } = require('./src/agents/retell');
 const http = require('http');
 const llmWebsocket = require('./src/agents/llm-websocket');
 const { createVapiAgent } = require('./src/agents/vapi');
@@ -47,13 +47,6 @@ function checkRequiredEnvVars(keys) {
 checkRequiredEnvVars([
   'ANTHROPIC_API_KEY',
   'RETELL_API_KEY',
-  'VAPI_API_KEY',
-  'ELEVENLABS_API_KEY',
-  'RECALL_API_KEY',
-  'TAVUS_API_KEY',
-  'LIVEKIT_API_KEY',
-  'LIVEKIT_API_SECRET',
-  'LIVEKIT_URL',
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
 ]);
@@ -61,6 +54,11 @@ checkRequiredEnvVars([
 // Soft-required: warn but don't exit
 const softRequired = [
   { keys: ['XAI_API_KEY'], feature: 'Grok fast-lane disabled, all calls will use Sonnet' },
+  { keys: ['VAPI_API_KEY'], feature: 'Vapi agent creation disabled' },
+  { keys: ['ELEVENLABS_API_KEY'], feature: 'ElevenLabs TTS disabled (using Fish Audio via Retell)' },
+  { keys: ['RECALL_API_KEY'], feature: 'Recall.ai bot deployment disabled' },
+  { keys: ['TAVUS_API_KEY'], feature: 'Tavus video conversations disabled' },
+  { keys: ['LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'LIVEKIT_URL'], feature: 'LiveKit video sessions disabled' },
 ];
 for (const { keys, feature } of softRequired) {
   const missing = keys.filter(k => !env[k] && !process.env[k]);
@@ -1651,6 +1649,21 @@ app.post('/admin/config', async (req, res) => {
   env[key] = value;
   console.log(`[admin] Runtime config set: ${key}=${value}`);
   res.json({ ok: true, key, message: 'Set at runtime. Will reset on next deploy.' });
+});
+
+// Admin: register Fish Audio voice for a client
+app.post('/admin/register-fish-voice', async (req, res) => {
+  const authKey = req.headers['x-admin-key'];
+  if (authKey !== env.SUPABASE_SERVICE_ROLE_KEY) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const clientId = req.body.client_id || SARAH_CLIENT_ID;
+  try {
+    const voiceId = await registerFishVoiceForClient(clientId);
+    res.json({ ok: true, client_id: clientId, voice_id: voiceId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============================================================

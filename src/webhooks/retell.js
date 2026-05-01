@@ -13,7 +13,7 @@ const env = require('../../config/env');
 function verifyRetellSignature(req) {
   const signature = req.headers['x-retell-signature'];
   if (!signature) return false;
-  const body = JSON.stringify(req.body);
+  const body = req.rawBody || JSON.stringify(req.body);
   const expected = crypto.createHmac('sha256', env.RETELL_API_KEY).update(body).digest('hex');
   try {
     return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));

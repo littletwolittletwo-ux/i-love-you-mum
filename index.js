@@ -87,6 +87,9 @@ process.on('unhandledRejection', (reason) => {
 // ============================================================
 const app = express();
 
+// Trust Railway's reverse proxy (fixes rate-limiter X-Forwarded-For errors)
+app.set('trust proxy', 1);
+
 // Security headers
 app.use(helmet({
   contentSecurityPolicy: false,
@@ -134,7 +137,11 @@ app.use('/webhooks', webhookLimiter);
 app.use(generalLimiter);
 
 // Body parsing
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString();
+  },
+}));
 
 // Serve static files from /public
 app.use(express.static(path.join(__dirname, 'public')));

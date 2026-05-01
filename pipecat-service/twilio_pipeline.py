@@ -11,10 +11,11 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
 )
 from pipecat.serializers.twilio import TwilioFrameSerializer
-from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
+from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
 from processors.fish_tts import FishAudioTTSService
 from processors.transcript_collector import TranscriptCollector
@@ -59,7 +60,7 @@ async def create_twilio_pipeline(
 
     stt = DeepgramSTTService(
         api_key=os.environ["DEEPGRAM_API_KEY"],
-        live_options=LiveOptions(
+        settings=DeepgramSTTService.Settings(
             model="nova-2",
             language="en-AU",
             smart_format=True,
@@ -71,9 +72,11 @@ async def create_twilio_pipeline(
 
     llm = AnthropicLLMService(
         api_key=os.environ["ANTHROPIC_API_KEY"],
-        model="claude-sonnet-4-20250514",
+        settings=AnthropicLLMService.Settings(
+            model="claude-sonnet-4-20250514",
+            max_tokens=200,
+        ),
     )
-    llm._max_tokens = 200
 
     tts = FishAudioTTSService(
         api_key=os.environ["FISH_AUDIO_API_KEY"],
@@ -84,18 +87,18 @@ async def create_twilio_pipeline(
 
     messages = [{"role": "system", "content": session.system_prompt}]
     context = LLMContext(messages)
-    context_aggregator = llm.create_context_aggregator(context)
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
-            context_aggregator.user(),
+            user_aggregator,
             collector,
             llm,
             tts,
             transport.output(),
-            context_aggregator.assistant(),
+            assistant_aggregator,
         ]
     )
 

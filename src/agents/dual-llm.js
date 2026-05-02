@@ -27,6 +27,7 @@ const SMART_MODEL = 'claude-sonnet-4-6';   // ~500-900ms TTFT
 const WORD_THRESHOLD = 8;                  // <= goes to fast lane, > goes to smart lane
 const MIN_PREDICT_WORDS = 4;               // don't waste tokens predicting on tiny snippets
 const RE_PREDICT_DELTA = 4;                // re-predict if user added this many new words
+const STALE_OVERLAP_THRESHOLD = 0.5;       // below this word overlap ratio → prediction is stale
 
 // callId -> session state
 const sessions = new Map();
@@ -36,7 +37,7 @@ function getSession(callId) {
     sessions.set(callId, {
       callId,
       systemPrompt: '',
-      pending: null, // { fast, smart, fastBuf, smartBuf, transcriptKey, abortController }
+      pending: null, // { fast, smart, fastBuf, smartBuf, transcriptKey, predictedWords, abortController }
     });
   }
   return sessions.get(callId);
@@ -66,6 +67,25 @@ function lastUserTurn(transcriptArray) {
 
 function wordCount(s) {
   return (s || '').trim().split(/\s+/).filter(Boolean).length;
+}
+
+function getWords(s) {
+  return (s || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Compute word overlap ratio between two strings.
+ * Returns 0..1 — the fraction of predicted words that appear in the final transcript.
+ */
+function wordOverlap(predicted, actual) {
+  const pWords = getWords(predicted);
+  const aWords = new Set(getWords(actual));
+  if (pWords.length === 0) return 0;
+  let hits = 0;
+  for (const w of pWords) {
+    if (aWords.has(w)) hits++;
+  }
+  return hits / pWords.length;
 }
 
 function buildMessages(transcriptArray) {
@@ -99,7 +119,6 @@ async function streamGrok({ systemPrompt, messages, buffer, signal }) {
       stream: true,
       temperature: 0.8,
       max_tokens: 200,
-      reasoning_effort: 'low', // keeps Grok in non-reasoning, fast mode
     },
     {
       headers: {
@@ -172,10 +191,13 @@ function predictResponses(callId, transcriptArray) {
   // De-dup: if we're already predicting on roughly this transcript, leave it.
   const transcriptKey = lastUser.slice(0, 200);
   if (session.pending) {
-    const prevWords = wordCount(session.pending.transcriptKey);
+    const prevWords = session.pending.predictedWords || 0;
     if (Math.abs(wc - prevWords) < RE_PREDICT_DELTA) return;
+    // User added enough new words — cancel old predictions and re-predict
     try { session.pending.abortController.abort(); } catch (_) {}
   }
+
+  console.log(`[dual-llm] predicting on ${wc} words`);
 
   const abortController = new AbortController();
   const messages = buildMessages(transcriptArray);
@@ -205,10 +227,9 @@ function predictResponses(callId, transcriptArray) {
 
   session.pending = {
     fast, smart, fastBuf, smartBuf, transcriptKey, abortController,
+    predictedWords: wc,
     startedAt: Date.now(),
   };
-
-  console.log(`[dual-llm] predicting on ${wc} words: "${lastUser.slice(0, 60)}..."`);
 }
 
 // ------------- final response selection -------------
@@ -230,16 +251,21 @@ async function streamFinalResponse({ callId, transcriptArray, onToken }) {
   console.log(`[dual-llm] response_required: ${wc} words → ${lane}`);
 
   const pending = session.pending;
-  // Use the prediction if it exists AND the final transcript matches what we predicted on
-  const canUsePrediction =
-    pending &&
-    pending.transcriptKey === lastUser.slice(0, 200) &&
-    !(useFast ? pending.fastBuf.error : pending.smartBuf.error);
+
+  // Use the prediction if it exists, the buffer has no error, and the
+  // transcript hasn't diverged too far from what we predicted on.
+  let canUsePrediction = false;
+  if (pending && !(useFast ? pending.fastBuf.error : pending.smartBuf.error)) {
+    const overlap = wordOverlap(pending.transcriptKey, lastUser.slice(0, 200));
+    if (overlap >= STALE_OVERLAP_THRESHOLD) {
+      canUsePrediction = true;
+    } else {
+      console.log(`[dual-llm] prediction stale (overlap=${(overlap * 100).toFixed(0)}%) — falling back to fresh`);
+    }
+  }
 
   if (canUsePrediction) {
     const buffer = useFast ? pending.fastBuf : pending.smartBuf;
-    const promise = useFast ? pending.fast : pending.smart;
-    console.log(`[dual-llm] using cached ${lane} prediction (started ${Date.now() - pending.startedAt}ms ago, ${buffer.tokens.length} tokens already)`);
 
     // Flush whatever's already been streamed
     let i = 0;
@@ -265,7 +291,6 @@ async function streamFinalResponse({ callId, transcriptArray, onToken }) {
     session.pending = null;
   }
 
-  console.log(`[dual-llm] no usable prediction — streaming fresh from ${lane}`);
   const messages = buildMessages(transcriptArray);
   const buffer = makeBuffer();
   let i = 0;

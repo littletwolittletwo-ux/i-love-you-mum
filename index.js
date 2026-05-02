@@ -206,6 +206,17 @@ app.get('/health', async (req, res) => {
   res.json(health);
 });
 
+// LLM WebSocket health — reports whether WS server is attached and active connection count
+app.get('/health/llm-ws', (req, res) => {
+  const stats = llmWebsocket.getStats();
+  res.json({
+    status: stats.attached ? 'ok' : 'not_attached',
+    attached: stats.attached,
+    activeConnections: stats.activeConnections,
+    callIds: stats.callIds,
+  });
+});
+
 // ============================================================
 //  DASHBOARD ROUTES — serve HTML pages
 // ============================================================

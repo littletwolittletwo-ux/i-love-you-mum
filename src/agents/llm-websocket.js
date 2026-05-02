@@ -21,18 +21,33 @@ const supabase = require('../database/client');
 const { buildSystemPrompt } = require('../prompts/builder');
 const dualLLM = require('./dual-llm');
 
+// Track active connections for health monitoring
+let wssInstance = null;
+const activeConnections = new Set();
+
 function attach(server, { path = '/llm-websocket' } = {}) {
   const wss = new WebSocket.Server({ noServer: true });
+  wssInstance = wss;
 
   server.on('upgrade', (req, socket, head) => {
     if (!req.url.startsWith(path)) return;
     wss.handleUpgrade(req, socket, head, (ws) => {
       const callId = req.url.split('/').pop().split('?')[0];
+      activeConnections.add(callId);
+      ws.on('close', () => activeConnections.delete(callId));
       handleConnection(ws, callId);
     });
   });
 
   console.log(`[llm-ws] WebSocket server attached at ${path}/:call_id`);
+}
+
+function getStats() {
+  return {
+    attached: wssInstance !== null,
+    activeConnections: activeConnections.size,
+    callIds: [...activeConnections],
+  };
 }
 
 async function handleConnection(ws, callId) {
@@ -143,22 +158,49 @@ async function bootstrapSession(callId, callDetailsMsg) {
   console.log(`[llm-ws] system prompt loaded for call ${callId}: ${systemPrompt.length} chars`);
 }
 
+// Sentence-ending punctuation used for TTS chunking
+const SENTENCE_BOUNDARY_RE = /[.?!]\s*/;
+const MAX_CHUNK_TOKENS = 15;
+
 /**
  * Stream a response back to Retell for a given response_id.
+ * Chunks tokens by sentence boundary or ~15 tokens for optimal TTS streaming.
  */
 async function respondToTurn(ws, callId, msg) {
   const responseId = msg.response_id;
   const transcript = msg.transcript || [];
 
-  const onToken = (token) => {
+  // Accumulate tokens and flush at sentence boundaries or MAX_CHUNK_TOKENS
+  let chunkBuf = '';
+  let tokenCount = 0;
+
+  const sendChunk = (content, complete) => {
     if (ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({
       response_type: 'response',
       response_id: responseId,
-      content: token,
-      content_complete: false,
+      content,
+      content_complete: complete,
       end_call: false,
     }));
+  };
+
+  const flushChunk = () => {
+    if (chunkBuf.length > 0) {
+      sendChunk(chunkBuf, false);
+      chunkBuf = '';
+      tokenCount = 0;
+    }
+  };
+
+  const onToken = (token) => {
+    chunkBuf += token;
+    tokenCount++;
+
+    // Flush on sentence boundary or token limit
+    if (SENTENCE_BOUNDARY_RE.test(chunkBuf) || tokenCount >= MAX_CHUNK_TOKENS) {
+      flushChunk();
+    }
   };
 
   try {
@@ -169,18 +211,14 @@ async function respondToTurn(ws, callId, msg) {
     });
   } catch (err) {
     console.error('[llm-ws] streamFinalResponse failed:', err.message);
-    onToken("Sorry, can you say that again?");
+    chunkBuf = "Sorry, can you say that again?";
   }
 
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      response_type: 'response',
-      response_id: responseId,
-      content: '',
-      content_complete: true,
-      end_call: false,
-    }));
-  }
+  // Flush any remaining buffered content
+  flushChunk();
+
+  // Send final content_complete=true
+  sendChunk('', true);
 }
 
-module.exports = { attach };
+module.exports = { attach, getStats };

@@ -147,10 +147,12 @@ async function createRetellAgent(clientId) {
     },
     voice_id: voiceId,
     language: 'en-US',
-    voice_speed: 1.0,
+    voice_model: 'eleven_turbo_v2',   // streaming-optimised TTS model
+    voice_speed: 1.05,                // slightly faster for natural sales cadence
     voice_temperature: 1.0,
-    responsiveness: 1.0,
+    responsiveness: 1.0,              // max responsiveness — ship audio ASAP
     interruption_sensitivity: 0.8,
+    ambient_sound: 'coffee-shop',     // subtle background ambience for realism
     enable_backchannel: true,
     backchannel_frequency: 0.8,
     backchannel_words: ['yeah', 'right', 'totally', 'mm', 'uh huh', 'for sure', 'exactly'],

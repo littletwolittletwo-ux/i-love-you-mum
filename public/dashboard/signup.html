@@ -103,8 +103,9 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="voice_id">Voice ID (optional)</label>
-            <input class="form-input" type="text" id="voice_id" name="voice_id" placeholder="Leave blank for Fish Audio default">
+            <label class="form-label" for="fish_audio_model_id">Fish Audio Voice Model ID (optional)</label>
+            <input class="form-input" type="text" id="fish_audio_model_id" name="fish_audio_model_id" placeholder="Paste from fish.audio — blank = default Sarah voice">
+            <div class="form-hint">Find voices at <a href="https://fish.audio" target="_blank" style="color:var(--accent);">fish.audio</a> → copy the model ID from the URL</div>
           </div>
         </div>
 
@@ -180,7 +181,7 @@
         top_objections: objections,
         agent_gender: document.getElementById('agent_gender').value,
         agent_personality: document.getElementById('agent_personality').value.trim() || 'warm, direct, curious',
-        voice_id: document.getElementById('voice_id').value.trim() || null,
+        fish_audio_model_id: document.getElementById('fish_audio_model_id').value.trim() || null,
         closing_enabled: document.getElementById('closing_enabled').checked,
         booking_enabled: document.getElementById('booking_enabled').checked,
         crm_enabled: document.getElementById('crm_enabled').checked,

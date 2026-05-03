@@ -25,14 +25,16 @@ function getWebSocketUrl() {
  * Register a Fish Audio voice with Retell so it can be used in agents.
  * Returns the Retell-assigned voice_id for the Fish Audio voice.
  */
-async function registerFishVoice() {
-  console.log(`[retell] Registering Fish Audio voice (provider_voice_id=${FISH_AUDIO_PROVIDER_VOICE_ID})...`);
+async function registerFishVoice(providerVoiceId, voiceName) {
+  const modelId = providerVoiceId || FISH_AUDIO_PROVIDER_VOICE_ID;
+  const name = voiceName || 'Fish Audio Voice';
+  console.log(`[retell] Registering Fish Audio voice (provider_voice_id=${modelId})...`);
 
   try {
     const res = await axios.post(`${RETELL_API_BASE}/add-community-voice`, {
       voice_provider: 'fish_audio',
-      voice_name: 'Sarah Fish Audio',
-      provider_voice_id: FISH_AUDIO_PROVIDER_VOICE_ID,
+      voice_name: name,
+      provider_voice_id: modelId,
     }, {
       headers: retellHeaders,
     });
@@ -56,11 +58,11 @@ async function registerFishVoice() {
 }
 
 /**
- * Register the Fish Audio voice and update a client's record with it.
- * Stores the Retell voice_id in the clients.voice_id column.
+ * Register a Fish Audio voice and update a client's record with it.
+ * Accepts optional custom Fish Audio model ID; defaults to Sarah's voice.
  */
-async function registerFishVoiceForClient(clientId) {
-  const voiceId = await registerFishVoice();
+async function registerFishVoiceForClient(clientId, fishModelId, voiceName) {
+  const voiceId = await registerFishVoice(fishModelId, voiceName);
 
   await supabase
     .from('clients')
@@ -72,8 +74,9 @@ async function registerFishVoiceForClient(clientId) {
 }
 
 /**
- * Get the voice_id for a client. If they have one stored (voice_id column),
- * use it. Otherwise register Fish Audio and save it.
+ * Get the voice_id for a client. If they have one stored, use it.
+ * If they have a fish_audio_model_id, register that voice first.
+ * Otherwise register the default Fish Audio voice.
  */
 async function resolveVoiceId(client) {
   if (client.voice_id) {
@@ -81,9 +84,11 @@ async function resolveVoiceId(client) {
     return client.voice_id;
   }
 
-  // Register Fish Audio voice and save to client
-  console.log(`[retell] No voice_id stored for client ${client.id} — registering Fish Audio voice`);
-  return registerFishVoiceForClient(client.id);
+  // Register custom or default Fish Audio voice
+  const fishModel = client.fish_audio_model_id || null;
+  const voiceName = client.agent_name ? `${client.agent_name} Fish Audio` : 'Fish Audio Voice';
+  console.log(`[retell] No voice_id stored for client ${client.id} — registering Fish Audio voice (model: ${fishModel || 'default'})`);
+  return registerFishVoiceForClient(client.id, fishModel, voiceName);
 }
 
 /**

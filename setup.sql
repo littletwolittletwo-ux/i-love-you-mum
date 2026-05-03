@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS clients (
   agent_gender text DEFAULT 'female',
   agent_personality text DEFAULT 'warm, direct, curious',
   voice_id text,
+  fish_audio_model_id text,
   retell_agent_id text,
   vapi_agent_id text,
   soul_document text,

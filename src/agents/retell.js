@@ -31,6 +31,7 @@ async function registerFishVoice() {
   try {
     const res = await axios.post(`${RETELL_API_BASE}/add-community-voice`, {
       voice_provider: 'fish_audio',
+      voice_name: 'Sarah Fish Audio',
       provider_voice_id: FISH_AUDIO_PROVIDER_VOICE_ID,
     }, {
       headers: retellHeaders,

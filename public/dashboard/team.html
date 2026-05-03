@@ -473,7 +473,7 @@
     let selectedClientId = null;
     let activeCallId = null;
     let pollInterval = null;
-    const SARAH_ID = 'agent_a65b3f0e09eddb372e7c7a9426';
+    const SARAH_CLIENT_ID = '9d3cd726-c57b-470d-9b18-24361a119496';
 
     // Load saved phone
     const savedPhone = localStorage.getItem('ai_closer_phone') || '';
@@ -600,21 +600,21 @@
       const sel = document.getElementById('callAgent');
       if (!sel) return;
 
-      // Default to Sarah if present
+      // Default to Sarah if present (match by client ID, not agent ID which changes)
       let sarahFirst = [...allClients].sort((a, b) => {
-        if (a.retell_agent_id === SARAH_ID) return -1;
-        if (b.retell_agent_id === SARAH_ID) return 1;
+        if (a.id === SARAH_CLIENT_ID) return -1;
+        if (b.id === SARAH_CLIENT_ID) return 1;
         return 0;
       });
 
       sel.innerHTML = sarahFirst.map(c =>
-        '<option value="' + c.id + '"' + (c.retell_agent_id === SARAH_ID ? ' selected' : '') + '>' +
+        '<option value="' + c.id + '"' + (c.id === SARAH_CLIENT_ID ? ' selected' : '') + '>' +
         esc(c.agent_name || 'Agent') + ' — ' + esc(c.business_name || '') +
         '</option>'
       ).join('');
 
       // If Sarah exists, auto-select her
-      const sarah = allClients.find(c => c.retell_agent_id === SARAH_ID);
+      const sarah = allClients.find(c => c.id === SARAH_CLIENT_ID);
       if (sarah) {
         selectedClientId = sarah.id;
       } else if (allClients.length) {

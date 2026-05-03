@@ -153,13 +153,14 @@ async function createRetellAgent(clientId) {
     },
     voice_id: voiceId,
     language: 'en-US',
-    voice_speed: 1.05,                // slightly faster for natural sales cadence
-    voice_temperature: 1.0,
-    responsiveness: 1.0,              // max responsiveness — ship audio ASAP
-    interruption_sensitivity: 0.8,
+    voice_speed: 1.0,
+    voice_temperature: 0.7,           // lower = fewer audio artifacts, more consistent
+    responsiveness: 0.85,             // slight pause before responding feels more natural
+    interruption_sensitivity: 0.7,    // less jumpy on interruptions
+    normalize_for_speech: true,       // numbers/abbreviations spoken naturally
     enable_backchannel: true,
-    backchannel_frequency: 0.8,
-    backchannel_words: ['yeah', 'right', 'totally', 'mm', 'uh huh', 'for sure', 'exactly'],
+    backchannel_frequency: 0.5,       // moderate — too high feels like constant interrupting
+    backchannel_words: ['yeah', 'right', 'mm', 'uh huh', 'for sure'],
     webhook_url: `${env.BASE_URL || process.env.BASE_URL || ''}/webhooks/retell`,
   };
 

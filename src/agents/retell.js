@@ -192,6 +192,8 @@ async function updateRetellAgent(agentId, voiceId) {
       llm_websocket_url: wsUrl,
     },
     voice_id: voiceId,
+    voice_model: null,
+    ambient_sound: null,
   };
 
   try {

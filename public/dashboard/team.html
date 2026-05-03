@@ -567,14 +567,14 @@
       let sorted = [...allClients];
       if (pinSarah) {
         sorted.sort((a, b) => {
-          if (a.retell_agent_id === SARAH_ID) return -1;
-          if (b.retell_agent_id === SARAH_ID) return 1;
+          if (a.id === SARAH_CLIENT_ID) return -1;
+          if (b.id === SARAH_CLIENT_ID) return 1;
           return (b.call_count || 0) - (a.call_count || 0);
         });
       }
 
       container.innerHTML = sorted.map(c => {
-        const isSarah = c.retell_agent_id === SARAH_ID;
+        const isSarah = c.id === SARAH_CLIENT_ID;
         const lastCall = c.last_call_date ? new Date(c.last_call_date).toLocaleDateString() : 'Never';
         const voiceStatus = c.voice_id ? '&#9989;' : '&#10060;';
 

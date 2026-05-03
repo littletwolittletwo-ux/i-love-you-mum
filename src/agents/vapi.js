@@ -65,7 +65,7 @@ Be warm. Be curious. Be real. Don't pitch. Don't sell. Just have a genuine conve
     },
     voice: {
       provider: '11labs',
-      voiceId: client.elevenlabs_voice_id || env.ELEVENLABS_VOICE_ID,
+      voiceId: client.voice_id || env.ELEVENLABS_VOICE_ID,
       model: 'eleven_v3',
     },
     transcriber: {

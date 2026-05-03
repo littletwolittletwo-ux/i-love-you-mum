@@ -32,7 +32,7 @@ async function main() {
     console.log('');
     console.log('=== SUCCESS ===');
     console.log(`Retell voice_id: ${voiceId}`);
-    console.log(`Saved to client ${clientId} (elevenlabs_voice_id column)`);
+    console.log(`Saved to client ${clientId} (voice_id column)`);
     process.exit(0);
   } catch (err) {
     console.error('');

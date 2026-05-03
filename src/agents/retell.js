@@ -57,14 +57,14 @@ async function registerFishVoice() {
 
 /**
  * Register the Fish Audio voice and update a client's record with it.
- * Stores the Retell voice_id in the elevenlabs_voice_id column (legacy name).
+ * Stores the Retell voice_id in the clients.voice_id column.
  */
 async function registerFishVoiceForClient(clientId) {
   const voiceId = await registerFishVoice();
 
   await supabase
     .from('clients')
-    .update({ elevenlabs_voice_id: voiceId })
+    .update({ voice_id: voiceId })
     .eq('id', clientId);
 
   console.log(`[retell] Client ${clientId} updated with Fish voice_id: ${voiceId}`);
@@ -72,13 +72,13 @@ async function registerFishVoiceForClient(clientId) {
 }
 
 /**
- * Get the voice_id for a client. If they have one stored (elevenlabs_voice_id column),
+ * Get the voice_id for a client. If they have one stored (voice_id column),
  * use it. Otherwise register Fish Audio and save it.
  */
 async function resolveVoiceId(client) {
-  if (client.elevenlabs_voice_id) {
-    console.log(`[retell] Using stored voice_id: ${client.elevenlabs_voice_id}`);
-    return client.elevenlabs_voice_id;
+  if (client.voice_id) {
+    console.log(`[retell] Using stored voice_id: ${client.voice_id}`);
+    return client.voice_id;
   }
 
   // Register Fish Audio voice and save to client

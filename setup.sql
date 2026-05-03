@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS clients (
   agent_name text NOT NULL,
   agent_gender text DEFAULT 'female',
   agent_personality text DEFAULT 'warm, direct, curious',
-  elevenlabs_voice_id text,
+  voice_id text,
   retell_agent_id text,
   vapi_agent_id text,
   soul_document text,

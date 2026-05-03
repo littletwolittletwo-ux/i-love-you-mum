@@ -80,7 +80,7 @@ async function createTavusPersona(clientId) {
 
   const { data: client } = await supabase
     .from('clients')
-    .select('agent_name, elevenlabs_voice_id')
+    .select('agent_name, voice_id')
     .eq('id', clientId)
     .single();
 
@@ -99,7 +99,7 @@ async function createTavusPersona(clientId) {
       },
       tts: {
         tts_engine: 'cartesia',
-        voice_id: client.elevenlabs_voice_id || undefined,
+        voice_id: client.voice_id || undefined,
       },
     },
   };

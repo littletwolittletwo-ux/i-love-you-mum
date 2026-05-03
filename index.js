@@ -588,7 +588,7 @@ app.get('/api/team/clients', async (req, res) => {
   try {
     const { data: clients, error } = await supabase
       .from('clients')
-      .select('id, agent_name, business_name, retell_agent_id, vapi_agent_id, elevenlabs_voice_id, video_mode, created_at')
+      .select('id, agent_name, business_name, retell_agent_id, vapi_agent_id, voice_id, video_mode, created_at')
       .order('created_at', { ascending: false });
 
     if (error) return res.status(500).json({ error: error.message });

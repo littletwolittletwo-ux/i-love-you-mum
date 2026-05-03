@@ -22,7 +22,7 @@ const env = require('../../config/env');
 
 const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
-const FAST_MODEL = 'grok-4.1-fast';        // ~150-250ms TTFT, non-reasoning
+const FAST_MODEL = 'grok-3-fast';           // ~150-250ms TTFT, non-reasoning
 const SMART_MODEL = 'claude-sonnet-4-6';   // ~500-900ms TTFT
 const WORD_THRESHOLD = 8;                  // <= goes to fast lane, > goes to smart lane
 const MIN_PREDICT_WORDS = 4;               // don't waste tokens predicting on tiny snippets
@@ -111,24 +111,31 @@ async function streamGrok({ systemPrompt, messages, buffer, signal }) {
     return;
   }
 
-  const res = await axios.post(
-    'https://api.x.ai/v1/chat/completions',
-    {
-      model: FAST_MODEL,
-      messages: [{ role: 'system', content: systemPrompt }, ...messages],
-      stream: true,
-      temperature: 0.8,
-      max_tokens: 200,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${env.XAI_API_KEY}`,
-        'Content-Type': 'application/json',
+  let res;
+  try {
+    res = await axios.post(
+      'https://api.x.ai/v1/chat/completions',
+      {
+        model: FAST_MODEL,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        stream: true,
+        temperature: 0.8,
+        max_tokens: 200,
       },
-      responseType: 'stream',
-      signal,
-    },
-  );
+      {
+        headers: {
+          Authorization: `Bearer ${env.XAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        responseType: 'stream',
+        signal,
+      },
+    );
+  } catch (e) {
+    buffer.error = e;
+    buffer.done = true;
+    return;
+  }
 
   return new Promise((resolve, reject) => {
     let leftover = '';

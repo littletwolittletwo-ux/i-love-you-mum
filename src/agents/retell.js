@@ -254,6 +254,17 @@ async function initiateOutboundCall(prospectId, clientId, phoneNumber) {
   // Update agent with fresh prospect memory
   await updateAgentForProspect(clientId, prospectId);
 
+  // Bind the phone number to this client's agent (multi-agent support)
+  try {
+    await axios.patch(`${RETELL_API_BASE}/update-phone-number/${retellPhone}`, {
+      outbound_agent_id: client.retell_agent_id,
+      inbound_agent_id: client.retell_agent_id,
+    }, { headers: retellHeaders });
+    console.log(`[retell] Phone ${retellPhone} bound to agent ${client.retell_agent_id}`);
+  } catch (bindErr) {
+    console.warn(`[retell] Phone binding failed (non-fatal): ${bindErr.response?.data?.message || bindErr.message}`);
+  }
+
   // Place the call via Retell v2
   let retellCall;
   try {

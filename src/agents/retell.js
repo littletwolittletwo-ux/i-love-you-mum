@@ -154,6 +154,7 @@ async function createRetellAgent(clientId) {
     enable_backchannel: true,
     backchannel_frequency: 0.8,
     backchannel_words: ['yeah', 'right', 'totally', 'mm', 'uh huh', 'for sure', 'exactly'],
+    webhook_url: `${env.BASE_URL || process.env.BASE_URL || ''}/webhooks/retell`,
   };
 
   try {
